@@ -1,5 +1,16 @@
 import { displaySlice } from "./display"
 
+// Summarize only genuinely large pastes into a "[Pasted ~N lines]" placeholder.
+// Short pastes, including dictated speech-to-text input (typically a sentence
+// or two on a single line), must stay inline and editable.
+const PASTE_SUMMARY_LINE_LIMIT = 10
+const PASTE_SUMMARY_CHAR_LIMIT = 1000
+
+export function shouldSummarizePaste(text: string) {
+  const lines = (text.match(/\n/g)?.length ?? 0) + 1
+  return lines > PASTE_SUMMARY_LINE_LIMIT || text.length > PASTE_SUMMARY_CHAR_LIMIT
+}
+
 export function stripPromptPartIDs<Part extends { id: string; messageID: string; sessionID: string }>(part: Part) {
   const { id: _id, messageID: _messageID, sessionID: _sessionID, ...rest } = part
   return rest

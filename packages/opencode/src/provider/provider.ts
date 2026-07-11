@@ -1105,6 +1105,31 @@ export class ModelNotFoundError extends Schema.TaggedErrorClass<ModelNotFoundErr
   }
 }
 
+export class ModelSelectorNotFoundError extends Schema.TaggedErrorClass<ModelSelectorNotFoundError>()(
+  "ProviderModelSelectorNotFoundError",
+  {
+    selector: Schema.String,
+    suggestions: Schema.Array(Schema.String),
+  },
+) {
+  override get message() {
+    const suggestions = this.suggestions.length ? ` Available matches: ${this.suggestions.join(", ")}.` : ""
+    return `No available model matches "${this.selector}".${suggestions}`
+  }
+}
+
+export class AmbiguousModelSelectorError extends Schema.TaggedErrorClass<AmbiguousModelSelectorError>()(
+  "ProviderAmbiguousModelSelectorError",
+  {
+    selector: Schema.String,
+    matches: Schema.Array(Schema.String),
+  },
+) {
+  override get message() {
+    return `Model selector "${this.selector}" is ambiguous. Choose one of: ${this.matches.join(", ")}.`
+  }
+}
+
 export class InitError extends Schema.TaggedErrorClass<InitError>()("ProviderInitError", {
   providerID: ProviderV2.ID,
   cause: Schema.optional(Schema.Defect()),
@@ -1141,12 +1166,14 @@ export class NoModelsError extends Schema.TaggedErrorClass<NoModelsError>()("Pro
 }
 
 export type DefaultModelError = ModelNotFoundError | NoProvidersError | NoModelsError
-export type Error = ModelNotFoundError | InitError | NoProvidersError | NoModelsError
+export type SelectorError = ModelNotFoundError | ModelSelectorNotFoundError | AmbiguousModelSelectorError
+export type Error = SelectorError | InitError | NoProvidersError | NoModelsError
 
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderV2.ID, Info>>
   readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
   readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
+  readonly resolveModel: (selector: string) => Effect.Effect<Model, SelectorError>
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
   readonly closest: (
     providerID: ProviderV2.ID,
@@ -1815,6 +1842,47 @@ const layer = Layer.effect(
       return info
     })
 
+    const resolveModel = Effect.fn("Provider.resolveModel")(function* (selector: string) {
+      const value = selector.trim()
+      if (value.includes("/")) {
+        const parsed = parseModel(value)
+        return yield* getModel(parsed.providerID, parsed.modelID)
+      }
+
+      const s = yield* InstanceState.get(state)
+      const requested = selectorTokens(value)
+      const models = Object.values(s.providers).flatMap((provider) =>
+        Object.values(provider.models).map((model) => ({ provider, model })),
+      )
+      const matches = models.filter(({ provider, model }) => {
+        const aliases = [
+          model.id,
+          model.name,
+          model.family,
+          `${provider.id} ${model.id}`,
+          `${provider.name} ${model.name}`,
+        ]
+          .filter((item): item is string => typeof item === "string")
+          .map(selectorTokens)
+        return aliases.some((alias) => matchesSelector(alias, requested))
+      })
+      if (matches.length === 1) return matches[0].model
+
+      const references = matches.map(({ model }) => `${model.providerID}/${model.id}`).toSorted()
+      if (references.length > 1) return yield* new AmbiguousModelSelectorError({ selector: value, matches: references })
+
+      const suggestions = models
+        .filter(({ provider, model }) => {
+          const candidate = selectorTokens(
+            `${provider.id} ${provider.name} ${model.id} ${model.name} ${model.family ?? ""}`,
+          )
+          return requested.parts.some((part) => candidate.parts.includes(part))
+        })
+        .map(({ model }) => `${model.providerID}/${model.id}`)
+        .slice(0, 5)
+      return yield* new ModelSelectorNotFoundError({ selector: value, suggestions })
+    })
+
     const getLanguage = Effect.fn("Provider.getLanguage")(function* (model: Model) {
       const s = yield* InstanceState.get(state)
       const envs = yield* env.all()
@@ -1962,7 +2030,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({ list, getProvider, getModel, resolveModel, getLanguage, closest, getSmallModel, defaultModel })
   }),
 )
 
@@ -1983,6 +2051,46 @@ export function parseModel(model: string) {
     providerID: ProviderV2.ID.make(providerID),
     modelID: ModelV2.ID.make(rest.join("/")),
   }
+}
+
+function selectorTokens(value: string) {
+  const numbers: Record<string, string> = {
+    one: "1",
+    two: "2",
+    three: "3",
+    four: "4",
+    five: "5",
+    six: "6",
+    seven: "7",
+    eight: "8",
+    nine: "9",
+    ten: "10",
+  }
+  const parts = value
+    .normalize("NFKD")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => numbers[part] ?? part)
+  return { parts, normalized: parts.join("") }
+}
+
+// Words may appear in any order, but version-number tokens must appear in the
+// alias in the same relative order so "5.6" never silently selects a "6.5" model.
+function matchesSelector(alias: ReturnType<typeof selectorTokens>, requested: ReturnType<typeof selectorTokens>) {
+  if (alias.normalized === requested.normalized) return true
+  if (requested.parts.length < 2) return false
+  const isNumber = (part: string) => /^\d+$/.test(part)
+  const words = requested.parts.filter((part) => !isNumber(part))
+  if (!words.every((part) => alias.parts.includes(part))) return false
+  const aliasNumbers = alias.parts.filter(isNumber)
+  let cursor = 0
+  for (const part of requested.parts.filter(isNumber)) {
+    cursor = aliasNumbers.indexOf(part, cursor)
+    if (cursor === -1) return false
+    cursor++
+  }
+  return true
 }
 
 export const node = LayerNode.make({

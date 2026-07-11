@@ -24,6 +24,7 @@ import { Schema } from "effect"
 import z from "zod"
 import { Plugin } from "../plugin"
 import { Provider } from "@/provider/provider"
+import { Auth } from "@/auth"
 
 import { WebSearchTool } from "./websearch"
 import { LspTool } from "./lsp"
@@ -443,6 +444,7 @@ export const node = LayerNode.make({
     RuntimeFlags.node,
     MCP.node,
     Database.node,
+    Auth.node,
     Ripgrep.node,
   ],
 })

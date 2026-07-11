@@ -17,3 +17,7 @@ Usage notes:
 5. The agent's outputs should generally be trusted
 6. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent. Tell it how to verify its work if possible (e.g., relevant test commands).
 7. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+8. When the user names a model for a subagent, pass that name in model. Canonical provider/model references are preferred, but an unambiguous configured model name is accepted.
+9. Keep reasoning level separate from model identity by passing variant (for example, variant="high"). Do not append reasoning levels to canonical model references.
+10. When the user requests multiple subagents with different models, issue one Task call per model and launch independent calls concurrently when possible.
+11. If a model selector is ambiguous across providers (for example, a subscription route and AWS Bedrock), do not guess. Ask the user which canonical provider/model route they intend.

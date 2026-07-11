@@ -62,6 +62,10 @@ export namespace ProviderTest {
             if (providerID === row.id && modelID === mdl.id) return Effect.succeed(mdl)
             return Effect.die(new Error(`Unknown test model: ${providerID}/${modelID}`))
           }),
+          resolveModel: Effect.fn("TestProvider.resolveModel")((selector) => {
+            if (selector === mdl.name || selector === `${row.id}/${mdl.id}`) return Effect.succeed(mdl)
+            return Effect.die(new Error(`Unknown test model selector: ${selector}`))
+          }),
           getLanguage: Effect.fn("TestProvider.getLanguage")(() =>
             Effect.die(new Error("ProviderTest.getLanguage not configured")),
           ),

@@ -2260,11 +2260,17 @@ function Task(props: ToolProps) {
   const content = createMemo(() => {
     const description = stringValue(props.input.description)
     if (!description) return ""
+    const model = recordValue(props.metadata.model)
+    const providerID = stringValue(model?.providerID)
+    const modelID = stringValue(model?.modelID)
     let content = [
       formatSubagentTitle(
         Locale.titlecase(stringValue(props.input.subagent_type) ?? "General"),
         description,
         props.metadata.background === true,
+        providerID && modelID ? `${providerID}/${modelID}` : undefined,
+        stringValue(props.metadata.variant),
+        stringValue(props.metadata.authVia),
       ),
     ]
 
@@ -2312,8 +2318,16 @@ export function formatSubagentToolcalls(count: number) {
   return `${count} toolcall${count === 1 ? "" : "s"}`
 }
 
-export function formatSubagentTitle(agent: string, description: string, background: boolean) {
-  return `${agent} Task${background ? " (background)" : ""} — ${description}`
+export function formatSubagentTitle(
+  agent: string,
+  description: string,
+  background: boolean,
+  model?: string,
+  variant?: string,
+  authVia?: string,
+) {
+  const route = [model, variant, authVia].filter(Boolean).join(" · ")
+  return `${agent} Task${background ? " (background)" : ""}${route ? ` [${route}]` : ""} — ${description}`
 }
 
 export function formatSubagentRetry(attempt: number, message: string) {

@@ -3,7 +3,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
-import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Deferred, Effect, Exit, Fiber } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -24,6 +24,8 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { Provider } from "../../src/provider/provider"
+import { Auth } from "../../src/auth"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -34,10 +36,58 @@ const ref = {
   modelID: ModelV2.ID.make("test-model"),
 }
 
+const modelSelectionConfig = {
+  provider: {
+    direct: {
+      name: "OpenAI Subscription",
+      npm: "@ai-sdk/openai-compatible",
+      options: { apiKey: "test-key", baseURL: "http://127.0.0.1:1/v1" },
+      models: {
+        "gpt-5.6-sol-pro": {
+          name: "GPT 5.6 Sol Pro",
+          reasoning: true,
+          tool_call: true,
+          variants: { high: {}, xhigh: {} },
+        },
+        "claude-fable-5": {
+          name: "Claude Fable 5",
+          family: "Fable 5",
+          reasoning: true,
+          tool_call: true,
+          variants: { high: {} },
+        },
+      },
+    },
+    bedrock: {
+      name: "AWS Bedrock",
+      npm: "@ai-sdk/openai-compatible",
+      options: { apiKey: "test-key", baseURL: "http://127.0.0.1:1/v1" },
+      models: {
+        "us.openai.gpt-5.6-sol-pro-v1": {
+          name: "GPT 5.6 Sol Pro",
+          reasoning: true,
+          tool_call: true,
+          variants: { high: {} },
+        },
+      },
+    },
+  },
+  agent: {
+    "fable-reviewer": {
+      description: "Reviews using Fable",
+      mode: "subagent" as const,
+      model: "direct/claude-fable-5",
+      variant: "ultra",
+    },
+  },
+}
+
 const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
     LayerNode.group([
       Agent.node,
+      Provider.node,
+      Auth.node,
       BackgroundJob.node,
       EventV2Bridge.node,
       Config.node,
@@ -139,6 +189,289 @@ function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithPa
 }
 
 describe("tool.task", () => {
+  it.instance(
+    "resolves natural model names only when the provider route is unambiguous",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* Provider.Service
+        const fable = yield* provider.resolveModel("Fable five")
+        expect(`${fable.providerID}/${fable.id}`).toBe("direct/claude-fable-5")
+
+        const error = yield* provider
+          .resolveModel("GPT 5.6 Sol Pro")
+          .pipe(Effect.catch((error) => Effect.succeed(error)))
+        expect(error).toBeInstanceOf(Provider.AmbiguousModelSelectorError)
+        if (error instanceof Provider.AmbiguousModelSelectorError) {
+          expect(error.matches).toEqual(["bedrock/us.openai.gpt-5.6-sol-pro-v1", "direct/gpt-5.6-sol-pro"])
+        }
+
+        // Version tokens must match in order: "6.5" must not select the 5.6 models.
+        const transposed = yield* provider
+          .resolveModel("GPT 6.5 Sol Pro")
+          .pipe(Effect.catch((error) => Effect.succeed(error)))
+        expect(transposed).toBeInstanceOf(Provider.ModelSelectorNotFoundError)
+      }),
+    { config: modelSelectionConfig },
+  )
+
+  it.instance(
+    "drops an invalid configured agent variant instead of failing the task",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+
+        const result = yield* def.execute(
+          {
+            description: "review with configured agent",
+            prompt: "review the proposed change",
+            subagent_type: "fable-reviewer",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps({ onPrompt: (input) => (seen = input) }) },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.model).toEqual({
+          providerID: ProviderV2.ID.make("direct"),
+          modelID: ModelV2.ID.make("claude-fable-5"),
+        })
+        expect(seen?.variant).toBeUndefined()
+        expect((yield* sessions.get(result.metadata.sessionId)).model).toEqual({
+          id: ModelV2.ID.make("claude-fable-5"),
+          providerID: ProviderV2.ID.make("direct"),
+          variant: "default",
+        })
+      }),
+    { config: modelSelectionConfig },
+  )
+
+  it.instance(
+    "fails an explicit invalid variant without falling back",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+
+        const exit = yield* def
+          .execute(
+            {
+              description: "review with bad variant",
+              prompt: "review the proposed change",
+              subagent_type: "general",
+              model: "direct/claude-fable-5",
+              variant: "ultra",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps() },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+      }),
+    { config: modelSelectionConfig },
+  )
+
+  it.instance(
+    "ignores disabled provider routes during natural model resolution",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* Provider.Service
+        const model = yield* provider.resolveModel("GPT 5.6 Sol Pro")
+        expect(`${model.providerID}/${model.id}`).toBe("direct/gpt-5.6-sol-pro")
+      }),
+    { config: { ...modelSelectionConfig, disabled_providers: ["bedrock"] } },
+  )
+
+  it.instance(
+    "runs a subagent with an explicitly selected model and reasoning variant",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+
+        const result = yield* def.execute(
+          {
+            description: "review with fable",
+            prompt: "review the proposed change",
+            subagent_type: "general",
+            model: "Fable five",
+            variant: "HIGH",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps({ onPrompt: (input) => (seen = input) }) },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.model).toEqual({
+          providerID: ProviderV2.ID.make("direct"),
+          modelID: ModelV2.ID.make("claude-fable-5"),
+        })
+        expect(seen?.variant).toBe("high")
+        expect(result.metadata.requestedModel).toBe("Fable five")
+        expect(result.metadata.variant).toBe("high")
+        expect(result.metadata.authVia).toBe("custom")
+        expect((yield* sessions.get(result.metadata.sessionId)).model).toEqual({
+          id: ModelV2.ID.make("claude-fable-5"),
+          providerID: ProviderV2.ID.make("direct"),
+          variant: "high",
+        })
+      }),
+    { config: modelSelectionConfig },
+  )
+
+  it.instance(
+    "preserves a resumed child's model and allows an explicit switch",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { chat, assistant } = yield* seed()
+        const child = yield* sessions.create({
+          parentID: chat.id,
+          title: "Existing child",
+          agent: "general",
+          model: {
+            id: ModelV2.ID.make("claude-fable-5"),
+            providerID: ProviderV2.ID.make("direct"),
+            variant: "high",
+          },
+        })
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const seen: SessionPrompt.PromptInput[] = []
+        const context = {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps: stubOps({ onPrompt: (input) => seen.push(input) }) },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        }
+
+        yield* def.execute(
+          {
+            description: "continue review",
+            prompt: "continue",
+            subagent_type: "general",
+            task_id: child.id,
+          },
+          context,
+        )
+        yield* def.execute(
+          {
+            description: "switch reviewer",
+            prompt: "continue with the new model",
+            subagent_type: "general",
+            task_id: child.id,
+            model: "direct/gpt-5.6-sol-pro",
+            variant: "xhigh",
+          },
+          context,
+        )
+
+        expect(seen[0]?.model).toEqual({
+          providerID: ProviderV2.ID.make("direct"),
+          modelID: ModelV2.ID.make("claude-fable-5"),
+        })
+        expect(seen[0]?.variant).toBe("high")
+        expect(seen[1]?.model).toEqual({
+          providerID: ProviderV2.ID.make("direct"),
+          modelID: ModelV2.ID.make("gpt-5.6-sol-pro"),
+        })
+        expect(seen[1]?.variant).toBe("xhigh")
+        expect((yield* sessions.get(child.id)).model).toEqual({
+          id: ModelV2.ID.make("gpt-5.6-sol-pro"),
+          providerID: ProviderV2.ID.make("direct"),
+          variant: "xhigh",
+        })
+      }),
+    { config: modelSelectionConfig },
+  )
+
+  it.instance(
+    "runs parallel children with independent model selections",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const seen: SessionPrompt.PromptInput[] = []
+        const context = {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps: stubOps({ onPrompt: (input) => seen.push(input) }) },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        }
+
+        const results = yield* Effect.all(
+          [
+            def.execute(
+              {
+                description: "sol independent review",
+                prompt: "review with sol",
+                subagent_type: "general",
+                model: "direct/gpt-5.6-sol-pro",
+                variant: "high",
+              },
+              context,
+            ),
+            def.execute(
+              {
+                description: "fable independent review",
+                prompt: "review with fable",
+                subagent_type: "general",
+                model: "Fable five",
+                variant: "high",
+              },
+              context,
+            ),
+          ],
+          { concurrency: "unbounded" },
+        )
+
+        expect(new Set(results.map((result) => result.metadata.sessionId)).size).toBe(2)
+        expect(
+          new Set(seen.map((input) => `${input.model?.providerID}/${input.model?.modelID}/${input.variant}`)),
+        ).toEqual(new Set(["direct/gpt-5.6-sol-pro/high", "direct/claude-fable-5/high"]))
+      }),
+    { config: modelSelectionConfig },
+  )
+
   it.instance(
     "description sorts subagents by name and is stable across calls",
     () =>
@@ -296,6 +629,8 @@ describe("tool.task", () => {
         metadata: {
           description: "inspect bug",
           subagent_type: "general",
+          model: "test/test-model",
+          variant: "xhigh",
         },
       })
     }),

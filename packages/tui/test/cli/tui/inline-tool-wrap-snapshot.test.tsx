@@ -285,6 +285,9 @@ describe("TUI inline tool wrapping", () => {
     expect(formatSubagentTitle("Explore", "Inspect renderer", true)).toBe(
       "Explore Task (background) — Inspect renderer",
     )
+    expect(formatSubagentTitle("General", "Review change", false, "openai/gpt-5.6-sol", "high", "account")).toBe(
+      "General Task [openai/gpt-5.6-sol · high · account] — Review change",
+    )
   })
 
   test("keeps retry status ahead of wrapping messages", () => {

@@ -14,6 +14,8 @@ import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { Provider } from "@/provider/provider"
+import { Auth } from "@/auth"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -44,6 +46,13 @@ const BaseParameterFields = {
   description: Schema.String.annotate({ description: "A short (3-5 words) description of the task" }),
   prompt: Schema.String.annotate({ description: "The task for the agent to perform" }),
   subagent_type: Schema.String.annotate({ description: "The type of specialized agent to use for this task" }),
+  model: Schema.optional(Schema.String).annotate({
+    description:
+      "Provider-qualified model (provider/model) or an unambiguous model name. If multiple providers expose the same named model, the task fails and lists the canonical choices",
+  }),
+  variant: Schema.optional(Schema.String).annotate({
+    description: "Model variant or reasoning level, such as high or xhigh. Validated against the selected model",
+  }),
   task_id: Schema.optional(Schema.String).annotate({
     description:
       "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
@@ -88,6 +97,8 @@ export const TaskTool = Tool.define(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const provider = yield* Provider.Service
+    const auth = yield* Auth.Service
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -101,18 +112,6 @@ export const TaskTool = Tool.define(
         )
       }
 
-      if (!ctx.extra?.bypassAgentCheck) {
-        yield* ctx.ask({
-          permission: id,
-          patterns: [params.subagent_type],
-          always: ["*"],
-          metadata: {
-            description: params.description,
-            subagent_type: params.subagent_type,
-          },
-        })
-      }
-
       const next = yield* agent.get(params.subagent_type)
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
@@ -121,6 +120,65 @@ export const TaskTool = Tool.define(
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+      const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.orDie,
+      )
+      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
+      const parentVariant = msg.info.variant
+
+      const requested = params.model ? yield* provider.resolveModel(params.model) : undefined
+      const current = session?.model
+        ? {
+            modelID: session.model.id,
+            providerID: session.model.providerID,
+            variant: session.model.variant === "default" ? undefined : session.model.variant,
+          }
+        : undefined
+      const model = requested
+        ? { modelID: requested.id, providerID: requested.providerID }
+        : session
+          ? (current ?? next.model ?? { modelID: msg.info.modelID, providerID: msg.info.providerID })
+          : (next.model ?? { modelID: msg.info.modelID, providerID: msg.info.providerID })
+      const configuredVariant = next.model ? next.variant : parentVariant
+      const selectedVariant =
+        params.variant ??
+        (params.model ? undefined : session ? (current ? current.variant : configuredVariant) : configuredVariant)
+      const modelInfo =
+        requested ??
+        (params.variant || next.model ? yield* provider.getModel(model.providerID, model.modelID) : undefined)
+      if (modelInfo && !modelInfo.capabilities.toolcall) {
+        return yield* Effect.fail(
+          new Error(`Model ${model.providerID}/${model.modelID} does not support tools required by subagents`),
+        )
+      }
+      const variant = yield* resolveVariant(modelInfo, selectedVariant, params.variant !== undefined)
+      const authInfo = yield* auth.get(model.providerID).pipe(Effect.orDie)
+      const providerInfo = (yield* provider.list())[model.providerID]
+      const authVia =
+        authInfo?.type === "oauth"
+          ? "account"
+          : providerInfo?.source === "env"
+            ? "env"
+            : authInfo || providerInfo
+              ? "custom"
+              : undefined
+
+      if (!ctx.extra?.bypassAgentCheck) {
+        yield* ctx.ask({
+          permission: id,
+          patterns: [params.subagent_type],
+          always: ["*"],
+          metadata: {
+            description: params.description,
+            subagent_type: params.subagent_type,
+            model: `${model.providerID}/${model.modelID}`,
+            ...(variant ? { variant } : {}),
+            ...(authVia ? { authVia } : {}),
+          },
+        })
+      }
+
       const parent = yield* sessions.get(ctx.sessionID)
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
@@ -145,6 +203,11 @@ export const TaskTool = Tool.define(
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
           agent: next.name,
+          model: {
+            id: model.modelID,
+            providerID: model.providerID,
+            variant: variant ?? "default",
+          },
           permission: [
             ...childPermission,
             ...childToolDenies.filter(
@@ -157,21 +220,13 @@ export const TaskTool = Tool.define(
           ],
         }))
 
-      const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
-        Effect.provideService(Database.Service, database),
-        Effect.orDie,
-      )
-      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
-      const variant = msg.info.variant
-
-      const model = next.model ?? {
-        modelID: msg.info.modelID,
-        providerID: msg.info.providerID,
-      }
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
         model,
+        ...(params.model ? { requestedModel: params.model } : {}),
+        ...(variant ? { variant } : {}),
+        ...(authVia ? { authVia } : {}),
         ...(runInBackground ? { background: true } : {}),
       }
 
@@ -185,6 +240,16 @@ export const TaskTool = Tool.define(
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
+        yield* sessions.setAgentModel({
+          sessionID: nextSession.id,
+          agent: next.name,
+          model: {
+            id: model.modelID,
+            providerID: model.providerID,
+            variant: variant ?? "default",
+          },
+          time: Date.now(),
+        })
         const result = yield* ops.prompt({
           messageID: MessageID.ascending(),
           sessionID: nextSession.id,
@@ -192,7 +257,7 @@ export const TaskTool = Tool.define(
             modelID: model.modelID,
             providerID: model.providerID,
           },
-          variant: next.model ? undefined : variant,
+          variant,
           agent: next.name,
           parts,
         })
@@ -208,7 +273,7 @@ export const TaskTool = Tool.define(
           .prompt({
             sessionID: ctx.sessionID,
             agent: currentParent.agent ?? ctx.agent,
-            variant,
+            variant: parentVariant,
             parts: [
               {
                 type: "text",
@@ -344,3 +409,19 @@ export const TaskTool = Tool.define(
     }
   }),
 )
+
+// Only an explicit Task `variant` fails on mismatch. Inherited variants from
+// agent config or the parent turn silently drop, matching the legacy prompt path.
+function resolveVariant(model: Provider.Model | undefined, requested: string | undefined, explicit: boolean) {
+  if (!requested || requested === "default") return Effect.succeed(undefined)
+  if (!model) return Effect.succeed(requested)
+  const variants = Object.keys(model.variants ?? {})
+  const variant = variants.find((item) => item.toLowerCase() === requested.toLowerCase())
+  if (variant) return Effect.succeed(variant)
+  if (!explicit) return Effect.succeed(undefined)
+  return Effect.fail(
+    new Error(
+      `Variant "${requested}" is not available for ${model.providerID}/${model.id}. Available variants: ${variants.join(", ") || "default"}`,
+    ),
+  )
+}

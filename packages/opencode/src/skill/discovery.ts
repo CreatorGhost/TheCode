@@ -156,9 +156,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
         ]
       })
 
-      const missing = data.skills.filter(
-        (skill) => isSafeSegment(skill.name) && !skill.files.includes("SKILL.md"),
-      )
+      const missing = data.skills.filter((skill) => isSafeSegment(skill.name) && !skill.files.includes("SKILL.md"))
       yield* Effect.forEach(
         missing,
         (skill) => Effect.logWarning("skill entry missing SKILL.md", { url: index, skill: skill.name }),

@@ -53,7 +53,9 @@ export async function createOpencodeServer(options?: ServerOptions) {
       output += chunk.toString()
       const lines = output.split("\n")
       for (const line of lines) {
-        if (line.startsWith("opencode server listening")) {
+        // "dcode server listening" for DCode servers; the opencode prefix is
+        // kept so this launcher still recognizes upstream/legacy servers.
+        if (line.startsWith("dcode server listening") || line.startsWith("opencode server listening")) {
           const match = line.match(/on\s+(https?:\/\/[^\s]+)/)
           if (!match) {
             clear()

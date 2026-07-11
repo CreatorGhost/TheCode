@@ -14,7 +14,7 @@
   node_modules ? callPackage ./node-modules.nix { },
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
-  pname = "opencode";
+  pname = "dcode";
   inherit (node_modules) version src;
   inherit node_modules;
 
@@ -62,10 +62,10 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   installPhase = ''
     runHook preInstall
 
-    install -Dm755 dist/opencode-*/bin/opencode $out/bin/opencode
+    install -Dm755 dist/dcode-*/bin/dcode $out/bin/dcode
     install -Dm644 schema.json $out/share/opencode/schema.json
 
-    wrapProgram $out/bin/opencode \
+    wrapProgram $out/bin/dcode \
       --prefix PATH : ${
         lib.makeBinPath (
           [
@@ -81,9 +81,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
   postInstall = lib.optionalString (stdenvNoCC.buildPlatform.canExecute stdenvNoCC.hostPlatform) ''
     # trick yargs into also generating zsh completions
-    installShellCompletion --cmd opencode \
-      --bash <($out/bin/opencode completion) \
-      --zsh <(SHELL=/bin/zsh $out/bin/opencode completion)
+    installShellCompletion --cmd dcode \
+      --bash <($out/bin/dcode completion) \
+      --zsh <(SHELL=/bin/zsh $out/bin/dcode completion)
   '';
 
   nativeInstallCheckInputs = [
@@ -101,9 +101,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
   meta = {
     description = "The open source coding agent";
-    homepage = "https://opencode.ai";
+    homepage = "https://github.com/CreatorGhost/TheCode";
     license = lib.licenses.mit;
-    mainProgram = "opencode";
+    mainProgram = "dcode";
     inherit (node_modules.meta) platforms;
   };
 })

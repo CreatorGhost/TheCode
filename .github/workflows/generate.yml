@@ -7,7 +7,7 @@ on:
 
 jobs:
   generate:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
@@ -18,13 +18,6 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
-          opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
-
       - name: Generate
         run: ./script/generate.ts
 
@@ -34,6 +27,8 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "chore: generate" --allow-empty
           git push origin HEAD:${{ github.ref_name }} --no-verify

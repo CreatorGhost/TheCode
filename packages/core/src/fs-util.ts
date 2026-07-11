@@ -109,8 +109,56 @@ export namespace FSUtil {
 
       const writeJson = Effect.fn("FileSystem.writeJson")(function* (path: string, data: unknown, mode?: number) {
         const content = JSON.stringify(data, null, 2)
-        yield* fs.writeFileString(path, content)
-        if (mode) yield* fs.chmod(path, mode)
+        // Refuse symlink targets so credential/state writers (auth, mcp) cannot be redirected.
+        const isLink = yield* Effect.tryPromise({
+          try: async () => {
+            try {
+              return (await NFS.lstat(path)).isSymbolicLink()
+            } catch (e) {
+              if (typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "ENOENT") {
+                return false
+              }
+              throw e
+            }
+          },
+          catch: (cause) => new FileSystemError({ method: "writeJson", cause }),
+        })
+        if (isLink) {
+          return yield* Effect.fail(
+            new FileSystemError({
+              method: "writeJson",
+              cause: new Error(`Refusing to write through symlink: ${path}`),
+            }),
+          )
+        }
+        // Write through a descriptor opened with O_NOFOLLOW so the symlink
+        // check is bound to the open itself (no lstat/write TOCTOU race on the
+        // leaf; the lstat above remains as the Windows fallback). Symlinked
+        // parent directories stay allowed on purpose: dotfile managers
+        // commonly symlink config/data directories.
+        yield* Effect.tryPromise({
+          try: async () => {
+            const flags =
+              NFS.constants.O_WRONLY | NFS.constants.O_CREAT | NFS.constants.O_TRUNC | (NFS.constants.O_NOFOLLOW ?? 0)
+            const handle = await NFS.open(path, flags, mode)
+            try {
+              await handle.writeFile(content)
+              if (mode) await handle.chmod(mode)
+            } finally {
+              await handle.close()
+            }
+          },
+          catch: (cause) => {
+            const code = typeof cause === "object" && cause !== null && "code" in cause && (cause as { code: string }).code
+            if (code === "ELOOP" || code === "EMLINK") {
+              return new FileSystemError({
+                method: "writeJson",
+                cause: new Error(`Refusing to write through symlink: ${path}`),
+              })
+            }
+            return new FileSystemError({ method: "writeJson", cause })
+          },
+        })
       })
 
       const ensureDir = Effect.fn("FileSystem.ensureDir")(function* (path: string) {

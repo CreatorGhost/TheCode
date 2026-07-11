@@ -308,6 +308,34 @@ describe("filesystem", () => {
     })
   })
 
+  describe("write()", () => {
+    test("refuses to write through a symlink", async () => {
+      if (process.platform === "win32") return
+      await using tmp = await tmpdir()
+      const target = path.join(tmp.path, "real.json")
+      const link = path.join(tmp.path, "link.json")
+      await fs.writeFile(target, "original")
+      await fs.symlink(target, link)
+
+      await expect(Filesystem.write(link, "hijacked", 0o600)).rejects.toThrow(/symlink/i)
+
+      expect(await fs.readFile(target, "utf-8")).toBe("original")
+    })
+
+    test("allows writes under a symlinked parent directory (dotfile setups)", async () => {
+      if (process.platform === "win32") return
+      await using tmp = await tmpdir()
+      const real = path.join(tmp.path, "real-dir")
+      const link = path.join(tmp.path, "link-dir")
+      await fs.mkdir(real)
+      await fs.symlink(real, link)
+
+      await Filesystem.write(path.join(link, "auth.json"), "ok", 0o600)
+
+      expect(await fs.readFile(path.join(real, "auth.json"), "utf-8")).toBe("ok")
+    })
+  })
+
   describe("writeJson()", () => {
     test("writes JSON data", async () => {
       await using tmp = await tmpdir()

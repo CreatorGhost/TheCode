@@ -398,7 +398,7 @@ add_to_path() {
 
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 
-current_shell=$(basename "$SHELL")
+current_shell=$(basename "${SHELL:-bash}")
 case $current_shell in
     fish)
         config_files="$HOME/.config/fish/config.fish"
@@ -475,6 +475,17 @@ echo -e ""
 echo -e "cd <project>  ${MUTED}# Open directory${NC}"
 echo -e "dcode        ${MUTED}# Run command${NC}"
 echo -e ""
+# PATH edits in shell config only apply to NEW shells; without this hint the
+# very first thing users type after installing fails with "command not found".
+if ! command -v dcode >/dev/null 2>&1; then
+    echo -e "${ORANGE}Open a new terminal, or run this to use dcode right now:${NC}"
+    if [ "$current_shell" = "fish" ]; then
+        echo -e "  fish_add_path $INSTALL_DIR"
+    else
+        echo -e "  export PATH=\"$INSTALL_DIR:\$PATH\""
+    fi
+    echo -e ""
+fi
 echo -e "${MUTED}For source and releases visit ${NC}https://github.com/CreatorGhost/TheCode"
 echo -e ""
 echo -e ""

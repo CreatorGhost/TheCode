@@ -111,6 +111,30 @@ describe("DatabaseMigration", () => {
     ).rejects.toThrow("Database is not empty and has no session table")
   })
 
+  test("refuses a database migrated by a newer version", async () => {
+    await expect(
+      run(
+        Effect.gen(function* () {
+          const db = yield* makeDb
+          yield* DatabaseMigration.apply(db)
+          yield* db.run(sql`INSERT INTO migration (id, time_completed) VALUES ('99991231000000_from_the_future', 1)`)
+          yield* DatabaseMigration.apply(db)
+        }),
+      ),
+    ).rejects.toThrow("newer version of opencode")
+  })
+
+  test("allows unknown migration ids older than the newest known migration", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+        yield* db.run(sql`INSERT INTO migration (id, time_completed) VALUES ('20260530232709_lovely_romulus', 1)`)
+        yield* DatabaseMigration.apply(db)
+      }),
+    )
+  })
+
   test("backfills existing Context Epoch rows to the build agent", async () => {
     await run(
       Effect.gen(function* () {

@@ -244,4 +244,16 @@ describe("Discovery.pull", () => {
       expect(hostileDownloads).toBe(0)
     }),
   )
+
+  it.live("rejects bare drive-letter skill names without fetching files", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => rm(cacheDir, { recursive: true, force: true }))
+      hostileSkills = [{ name: "C:", files: ["SKILL.md"] }]
+      hostileDownloads = 0
+      const discovery = yield* Discovery.Service
+      const dirs = yield* discovery.pull(`http://localhost:${server.port}/hostile/`)
+      expect(dirs).toEqual([])
+      expect(hostileDownloads).toBe(0)
+    }),
+  )
 })

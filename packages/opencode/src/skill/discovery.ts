@@ -21,6 +21,8 @@ function isSafeSegment(value: string) {
     value !== ".." &&
     !value.includes("/") &&
     !value.includes("\\") &&
+    // reject Windows drive-letter names like "C:" which resolve outside the cache
+    !value.includes(":") &&
     !value.includes("\0")
   )
 }
@@ -108,6 +110,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
 
       if (!data) return []
 
+      const unsafeSkills: string[] = []
       const entries = data.skills.flatMap((skill) => {
         if (!isSafeSegment(skill.name)) {
           return []
@@ -141,6 +144,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
           }
         })
         if (files.some((item) => item === undefined)) {
+          unsafeSkills.push(skill.name)
           return []
         }
         return [
@@ -158,6 +162,11 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
       yield* Effect.forEach(
         missing,
         (skill) => Effect.logWarning("skill entry missing SKILL.md", { url: index, skill: skill.name }),
+        { discard: true },
+      )
+      yield* Effect.forEach(
+        unsafeSkills,
+        (skill) => Effect.logWarning("skill entry has unsafe file path", { url: index, skill }),
         { discard: true },
       )
 

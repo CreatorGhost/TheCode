@@ -39,9 +39,10 @@
             };
           in
           rec {
-            opencode = final.callPackage ./nix/opencode.nix {
+            dcode = final.callPackage ./nix/opencode.nix {
               inherit node_modules;
             };
+            opencode = dcode;
             opencode-desktop = final.callPackage ./nix/desktop.nix {
               inherit opencode;
             };
@@ -56,10 +57,11 @@
           };
         in
         rec {
-          default = opencode;
-          opencode = pkgs.callPackage ./nix/opencode.nix {
+          default = dcode;
+          dcode = pkgs.callPackage ./nix/opencode.nix {
             inherit node_modules;
           };
+          opencode = dcode;
           opencode-desktop = pkgs.callPackage ./nix/desktop.nix {
             inherit opencode;
           };

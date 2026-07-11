@@ -131,8 +131,34 @@ export namespace FSUtil {
             }),
           )
         }
-        yield* fs.writeFileString(path, content)
-        if (mode) yield* fs.chmod(path, mode)
+        // Write through a descriptor opened with O_NOFOLLOW so the symlink
+        // check is bound to the open itself (no lstat/write TOCTOU race on the
+        // leaf; the lstat above remains as the Windows fallback). Symlinked
+        // parent directories stay allowed on purpose: dotfile managers
+        // commonly symlink config/data directories.
+        yield* Effect.tryPromise({
+          try: async () => {
+            const flags =
+              NFS.constants.O_WRONLY | NFS.constants.O_CREAT | NFS.constants.O_TRUNC | (NFS.constants.O_NOFOLLOW ?? 0)
+            const handle = await NFS.open(path, flags, mode)
+            try {
+              await handle.writeFile(content)
+              if (mode) await handle.chmod(mode)
+            } finally {
+              await handle.close()
+            }
+          },
+          catch: (cause) => {
+            const code = typeof cause === "object" && cause !== null && "code" in cause && (cause as { code: string }).code
+            if (code === "ELOOP" || code === "EMLINK") {
+              return new FileSystemError({
+                method: "writeJson",
+                cause: new Error(`Refusing to write through symlink: ${path}`),
+              })
+            }
+            return new FileSystemError({ method: "writeJson", cause })
+          },
+        })
       })
 
       const ensureDir = Effect.fn("FileSystem.ensureDir")(function* (path: string) {

@@ -321,6 +321,19 @@ describe("filesystem", () => {
 
       expect(await fs.readFile(target, "utf-8")).toBe("original")
     })
+
+    test("allows writes under a symlinked parent directory (dotfile setups)", async () => {
+      if (process.platform === "win32") return
+      await using tmp = await tmpdir()
+      const real = path.join(tmp.path, "real-dir")
+      const link = path.join(tmp.path, "link-dir")
+      await fs.mkdir(real)
+      await fs.symlink(real, link)
+
+      await Filesystem.write(path.join(link, "auth.json"), "ok", 0o600)
+
+      expect(await fs.readFile(path.join(real, "auth.json"), "utf-8")).toBe("ok")
+    })
   })
 
   describe("writeJson()", () => {

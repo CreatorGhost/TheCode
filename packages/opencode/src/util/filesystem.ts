@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, readFile, stat as statFile, writeFile } from "fs/promises"
+import { chmod, constants, lstat, mkdir, open, readFile, stat as statFile, writeFile } from "fs/promises"
 import { createWriteStream, existsSync, statSync } from "fs"
 import { realpathSync } from "fs"
 import { dirname, isAbsolute, join, resolve as pathResolve, win32 } from "path"
@@ -71,22 +71,39 @@ async function assertNotSymlink(p: string): Promise<void> {
   }
 }
 
+// O_NOFOLLOW is unavailable on Windows; assertNotSymlink covers that platform.
+const NO_FOLLOW_WRITE = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0)
+
+function isSymlinkRefusal(e: unknown) {
+  if (typeof e !== "object" || e === null || !("code" in e)) return false
+  const code = (e as { code: string }).code
+  // ELOOP on Linux/macOS, EMLINK on some BSDs when O_NOFOLLOW hits a symlink leaf.
+  return code === "ELOOP" || code === "EMLINK"
+}
+
+// Write through a descriptor opened with O_NOFOLLOW so the symlink check is
+// bound to the open itself (no lstat/write TOCTOU race on the leaf). Symlinked
+// parent directories stay allowed on purpose: dotfile managers commonly
+// symlink config/data directories.
+async function writeNoFollow(p: string, content: string | Buffer | Uint8Array, mode?: number): Promise<void> {
+  const handle = await open(p, NO_FOLLOW_WRITE, mode)
+  try {
+    await handle.writeFile(content)
+    if (mode) await handle.chmod(mode)
+  } finally {
+    await handle.close()
+  }
+}
+
 export async function write(p: string, content: string | Buffer | Uint8Array, mode?: number): Promise<void> {
   await assertNotSymlink(p)
   try {
-    if (mode) {
-      await writeFile(p, content, { mode })
-    } else {
-      await writeFile(p, content)
-    }
+    await writeNoFollow(p, content, mode)
   } catch (e) {
+    if (isSymlinkRefusal(e)) throw new Error(`Refusing to write through symlink: ${p}`)
     if (isEnoent(e)) {
       await mkdir(dirname(p), { recursive: true })
-      if (mode) {
-        await writeFile(p, content, { mode })
-      } else {
-        await writeFile(p, content)
-      }
+      await writeNoFollow(p, content, mode)
       return
     }
     throw e

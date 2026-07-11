@@ -64,6 +64,7 @@ export const CreateInput = Schema.Struct({
   type: Info.fields.type,
   branch: Info.fields.branch,
   projectID: ProjectV2.ID,
+  name: Schema.optional(Info.fields.name),
   extra: Schema.optional(Info.fields.extra),
 })
 export type CreateInput = Schema.Schema.Type<typeof CreateInput>
@@ -72,6 +73,7 @@ export const SessionWarpInput = Schema.Struct({
   workspaceID: Schema.NullOr(WorkspaceV2.ID),
   sessionID: SessionID,
   copyChanges: Schema.optional(Schema.Boolean),
+  directory: Schema.optional(Schema.String),
 })
 export type SessionWarpInput = Schema.Schema.Type<typeof SessionWarpInput>
 
@@ -439,8 +441,6 @@ const layer = Layer.effect(
     })
 
     const startSync = Effect.fn("Workspace.startSync")(function* (space: Info) {
-      if (!flags.experimentalWorkspaces) return
-
       const target = yield* WorkspaceAdapterRuntime.target(space).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
@@ -459,6 +459,8 @@ const layer = Layer.effect(
         setStatus(space.id, (yield* fs.existsSafe(target.directory)) ? "connected" : "error")
         return
       }
+
+      if (!flags.experimentalWorkspaces) return
 
       const exists = yield* FiberMap.has(syncFibers, space.id)
       if (exists && connections.get(space.id)?.status !== "error") return
@@ -495,7 +497,7 @@ const layer = Layer.effect(
       const config = yield* WorkspaceAdapterRuntime.configure(adapter, {
         ...input,
         id,
-        name: Slug.create(),
+        name: input.name || Slug.create(),
         directory: null,
         extra: input.extra ?? null,
       })
@@ -621,7 +623,7 @@ const layer = Layer.effect(
         }
 
         if (input.workspaceID === null) {
-          yield* session.setWorkspace({ sessionID: input.sessionID, workspaceID: undefined })
+          yield* session.setWorkspace({ sessionID: input.sessionID, workspaceID: undefined, directory: input.directory })
 
           return
         }

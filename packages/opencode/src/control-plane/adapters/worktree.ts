@@ -26,13 +26,15 @@ const provideContext = <A, E, R>(effect: Effect.Effect<A, E, R>, context: Worksp
   )
 
 export const WorktreeAdapter: WorkspaceAdapter = {
-  name: "Worktree",
+  name: "Linked workspace",
   description: "Create a git worktree",
   async configure(info, context) {
     const { AppRuntime, Worktree } = await loadWorktree()
     const next = await AppRuntime.runPromise(
       provideContext(
-        Worktree.Service.use((svc) => svc.makeWorktreeInfo({ detached: true })),
+        Worktree.Service.use((svc) =>
+          svc.makeWorktreeInfo({ detached: false, ...(info.name ? { name: info.name } : {}) }),
+        ),
         context,
       ),
     )
@@ -40,6 +42,7 @@ export const WorktreeAdapter: WorkspaceAdapter = {
       ...info,
       name: next.name,
       directory: next.directory,
+      branch: next.branch ?? null,
     }
   },
   async create(info, _env, _from, context) {

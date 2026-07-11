@@ -33,6 +33,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { Process } from "@/util/process"
 import { parseGitHubRemote } from "@/util/repository"
 import { Effect } from "effect"
+import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { extractResponseText, formatPromptTooLargeError } from "./github.shared"
 
 type GitHubAuthor = {
@@ -327,6 +328,10 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
       }
 
       async function addWorkflowFiles() {
+        // Pin the generated workflow to this release's immutable tag; the job
+        // grants id-token: write, so a mutable ref could run unreviewed code.
+        // Dev/preview builds have no release tag, so they track dev.
+        const actionRef = InstallationChannel === "latest" ? `v${InstallationVersion}` : "dev"
         const envStr =
           provider === "amazon-bedrock"
             ? ""
@@ -362,7 +367,7 @@ jobs:
           persist-credentials: false
 
       - name: Run DCode
-        uses: CreatorGhost/TheCode/github@dev${envStr}
+        uses: CreatorGhost/TheCode/github@${actionRef}${envStr}
         with:
           model: ${provider}/${model}`,
         )

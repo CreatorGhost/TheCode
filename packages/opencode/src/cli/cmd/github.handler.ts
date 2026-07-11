@@ -140,7 +140,7 @@ type IssueQueryResponse = {
 
 const AGENT_USERNAME = "opencode-agent[bot]"
 const AGENT_REACTION = "eyes"
-const WORKFLOW_FILE = ".github/workflows/opencode.yml"
+const WORKFLOW_FILE = ".github/workflows/dcode.yml"
 
 // Event categories for routing
 // USER_EVENTS: triggered by user actions, have actor/issueId, support reactions/comments
@@ -198,7 +198,7 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
             `    1. Commit the \`${WORKFLOW_FILE}\` file and push`,
             step2,
             "",
-            "    3. Go to a GitHub issue and comment `/oc summarize` to see the agent in action",
+            "    3. Go to a GitHub issue and comment `/dc summarize` to see the agent in action",
             "",
             "   Learn more about the GitHub agent - https://opencode.ai/docs/github/#usage-examples",
           ].join("\n"),
@@ -334,7 +334,7 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
 
         await Filesystem.write(
           path.join(app.root, WORKFLOW_FILE),
-          `name: opencode
+          `name: dcode
 
 on:
   issue_comment:
@@ -343,12 +343,12 @@ on:
     types: [created]
 
 jobs:
-  opencode:
+  dcode:
     if: |
-      contains(github.event.comment.body, ' /oc') ||
-      startsWith(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, ' /opencode') ||
-      startsWith(github.event.comment.body, '/opencode')
+      contains(github.event.comment.body, ' /dc') ||
+      startsWith(github.event.comment.body, '/dc') ||
+      contains(github.event.comment.body, ' /dcode') ||
+      startsWith(github.event.comment.body, '/dcode')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -361,8 +361,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run opencode
-        uses: anomalyco/opencode/github@latest${envStr}
+      - name: Run DCode
+        uses: CreatorGhost/TheCode/github@dev${envStr}
         with:
           model: ${provider}/${model}`,
         )
@@ -736,7 +736,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
       }
 
       const reviewContext = getReviewCommentContext()
-      const mentions = (process.env["MENTIONS"] || "/opencode,/oc")
+      const mentions = (process.env["MENTIONS"] || "/dcode,/dc")
         .split(",")
         .map((m) => m.trim().toLowerCase())
         .filter(Boolean)

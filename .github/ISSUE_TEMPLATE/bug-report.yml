@@ -21,8 +21,8 @@ body:
   - type: input
     id: opencode-version
     attributes:
-      label: OpenCode version
-      description: What version of OpenCode are you using?
+      label: DCode version
+      description: What version of DCode are you using?
     validations:
       required: false
 

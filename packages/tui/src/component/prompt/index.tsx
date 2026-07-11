@@ -246,8 +246,7 @@ export function Prompt(props: PromptProps) {
 
   createEffect(() => {
     if (!input || input.isDestroyed) return
-    if (props.disabled) input.cursorColor = theme.backgroundElement
-    if (!props.disabled) input.cursorColor = theme.text
+    input.cursorColor = props.disabled ? theme.backgroundElement : theme.primary
   })
 
   const lastUserMessage = createMemo(() => {
@@ -1422,7 +1421,7 @@ export function Prompt(props: PromptProps) {
                   setTimeout(() => {
                     // setTimeout is a workaround and needs to be addressed properly
                     if (!input || input.isDestroyed) return
-                    input.cursorColor = theme.primary
+                    input.cursorColor = props.disabled ? theme.backgroundElement : theme.primary
                   }, 0)
                 }}
                 onMouseDown={(r: MouseEvent) => r.target?.focus()}

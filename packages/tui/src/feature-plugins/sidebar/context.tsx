@@ -10,6 +10,8 @@ const money = new Intl.NumberFormat("en-US", {
   currency: "USD",
 })
 
+const BAR_WIDTH = 24
+
 function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
   const msg = createMemo(() => props.api.state.session.messages(props.session_id))
@@ -60,8 +62,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     </box>
   )
 }
-
-const BAR_WIDTH = 24
 
 const tui: TuiPlugin = async (api) => {
   api.slots.register({

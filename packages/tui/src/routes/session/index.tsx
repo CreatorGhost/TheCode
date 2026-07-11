@@ -1187,11 +1187,13 @@ export function Session() {
             paddingRight={2}
             backgroundColor={theme.backgroundPanel}
           >
-            <text fg={theme.textMuted} wrapMode="none">
+            <text fg={theme.textMuted} wrapMode="none" flexShrink={1} minWidth={0}>
               <span style={{ fg: theme.text, bold: true }}>de</span>
               <span style={{ fg: theme.primary, bold: true }}>code</span>
               <span> │ </span>
-              <span>{Locale.truncate(session()?.title ?? "", 60)}</span>
+              <span>
+                {Locale.truncate(session()?.title ?? "", Math.max(10, Math.min(60, dimensions().width - 55)))}
+              </span>
               <span style={{ fg: theme.textMuted }}> · {route.sessionID.slice(0, 10)}</span>
             </text>
             <Show when={budget()}>

@@ -254,13 +254,6 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const values = createMemo(() => {
       const active = store.themes[store.active]
       if (active) return resolveTheme(active, store.mode)
-
-      const saved = kv.get("decode_theme")
-      if (typeof saved === "string") {
-        const theme = store.themes[saved]
-        if (theme) return resolveTheme(theme, store.mode)
-      }
-
       return resolveTheme(store.themes[DEFAULT_THEME], store.mode)
     })
 

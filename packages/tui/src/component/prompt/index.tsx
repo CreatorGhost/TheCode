@@ -31,7 +31,12 @@ import { promptOffsetWidth } from "../../prompt/display"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
-import { countPasteLines, expandPastedTextPlaceholders, expandTrackedPastedText, shouldSummarizePaste } from "../../prompt/part"
+import {
+  countPasteLines,
+  expandPastedTextPlaceholders,
+  expandTrackedPastedText,
+  shouldSummarizePaste,
+} from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"

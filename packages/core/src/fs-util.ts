@@ -149,7 +149,8 @@ export namespace FSUtil {
             }
           },
           catch: (cause) => {
-            const code = typeof cause === "object" && cause !== null && "code" in cause && (cause as { code: string }).code
+            const code =
+              typeof cause === "object" && cause !== null && "code" in cause && (cause as { code: string }).code
             if (code === "ELOOP" || code === "EMLINK") {
               return new FileSystemError({
                 method: "writeJson",

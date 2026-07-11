@@ -12,13 +12,21 @@ function View(props: { api: TuiPluginApi }) {
 
   return (
     <box>
-      <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
-        <Show when={list().length > 2}>
-          <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
+      <box
+        flexDirection="row"
+        gap={1}
+        justifyContent="space-between"
+        onMouseDown={() => list().length > 2 && setOpen((x) => !x)}
+      >
+        <box flexDirection="row" gap={1}>
+          <Show when={list().length > 2}>
+            <text fg={theme().textMuted}>{open() ? "▼" : "▶"}</text>
+          </Show>
+          <text fg={theme().textMuted}>LSP</text>
+        </box>
+        <Show when={list().length > 0} fallback={<text fg={theme().textMuted}>{off() ? "off" : "idle"}</text>}>
+          <text fg={theme().primary}>{list().filter((item) => item.status === "connected").length} active</text>
         </Show>
-        <text fg={theme().text}>
-          <b>LSP</b>
-        </text>
       </box>
       <Show when={list().length <= 2 || open()}>
         <Show when={list().length === 0}>

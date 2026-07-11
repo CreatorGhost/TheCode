@@ -33,7 +33,8 @@ export function Home() {
   const promptMaxWidth = createMemo(() => {
     const configured = tuiConfig.prompt?.max_width
     if (configured === "auto") return Math.max(75, Math.floor(dimensions().width * 0.7))
-    return configured ?? 75
+    // Full-width field by default, matching the carbon home layout.
+    return configured ?? dimensions().width
   })
   let sent = false
 
@@ -69,7 +70,7 @@ export function Home() {
 
   return (
     <HomeSessionDestinationProvider>
-      <box flexGrow={1} alignItems="center" paddingLeft={2} paddingRight={2}>
+      <box flexGrow={1} alignItems="flex-start" paddingLeft={10} paddingRight={4}>
         <box flexGrow={1} minHeight={0} />
         <box height={4} minHeight={0} flexShrink={1} />
         <box flexShrink={0}>

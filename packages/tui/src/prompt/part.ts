@@ -6,9 +6,12 @@ import { displaySlice } from "./display"
 const PASTE_SUMMARY_LINE_LIMIT = 10
 const PASTE_SUMMARY_CHAR_LIMIT = 1000
 
+export function countPasteLines(text: string) {
+  return (text.match(/\n/g)?.length ?? 0) + 1
+}
+
 export function shouldSummarizePaste(text: string) {
-  const lines = (text.match(/\n/g)?.length ?? 0) + 1
-  return lines > PASTE_SUMMARY_LINE_LIMIT || text.length > PASTE_SUMMARY_CHAR_LIMIT
+  return countPasteLines(text) > PASTE_SUMMARY_LINE_LIMIT || text.length > PASTE_SUMMARY_CHAR_LIMIT
 }
 
 export function stripPromptPartIDs<Part extends { id: string; messageID: string; sessionID: string }>(part: Part) {

@@ -23,7 +23,6 @@ import { createEffect, createMemo, onCleanup, onMount } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useKV } from "./kv"
-import { useTuiConfig } from "../config"
 import { Global } from "@opencode-ai/core/global"
 import { Glob } from "@opencode-ai/core/util/glob"
 import { readFile } from "node:fs/promises"
@@ -89,11 +88,13 @@ type State = {
   ready: boolean
 }
 
+const DEFAULT_THEME = "carbon"
+
 const [store, setStore] = createStore<State>({
   themes: allThemes(),
   mode: "dark",
   lock: undefined,
-  active: "opencode",
+  active: DEFAULT_THEME,
   ready: false,
 })
 
@@ -103,7 +104,6 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
   name: "Theme",
   init: (props: { mode: "dark" | "light"; source?: ThemeSource }) => {
     const renderer = useRenderer()
-    const config = useTuiConfig()
     const kv = useKV()
     const themes = props.source ?? themeSource
     const pick = (value: unknown) => {
@@ -118,16 +118,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         if (!lock && pick(kv.get("theme_mode")) !== undefined) kv.set("theme_mode", undefined)
         draft.mode = mode
         draft.lock = lock
-        const active = config.theme ?? kv.get("theme", "opencode")
-        draft.active = typeof active === "string" ? active : "opencode"
+        // Carbon is decode's identity. Ignore inherited opencode config themes and
+        // legacy "theme" KV state; only an explicit /theme choice made in decode
+        // (stored under "decode_theme") overrides the default.
+        const active = kv.get("decode_theme", DEFAULT_THEME)
+        draft.active = typeof active === "string" ? active : DEFAULT_THEME
         draft.ready = false
       }),
     )
-
-    createEffect(() => {
-      const theme = config.theme
-      if (theme) setStore("active", theme)
-    })
 
     function syncCustomThemes() {
       return themes
@@ -140,7 +138,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
             }, {}),
           )
         })
-        .catch(() => setStore("active", "opencode"))
+        .catch(() => setStore("active", DEFAULT_THEME))
     }
 
     onMount(() => {
@@ -159,7 +157,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
           if (!colors.palette[0]) {
             if (hasResolvedSystemTheme) return
             setSystemTheme(undefined)
-            if (store.active === "system") setStore("active", "opencode")
+            if (store.active === "system") setStore("active", DEFAULT_THEME)
             return
           }
           const next = store.lock ?? terminalMode(colors) ?? mode
@@ -174,7 +172,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         .catch(() => {
           if (hasResolvedSystemTheme) return
           setSystemTheme(undefined)
-          if (store.active === "system") setStore("active", "opencode")
+          if (store.active === "system") setStore("active", DEFAULT_THEME)
         })
     }
 
@@ -257,13 +255,13 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       const active = store.themes[store.active]
       if (active) return resolveTheme(active, store.mode)
 
-      const saved = kv.get("theme")
+      const saved = kv.get("decode_theme")
       if (typeof saved === "string") {
         const theme = store.themes[saved]
         if (theme) return resolveTheme(theme, store.mode)
       }
 
-      return resolveTheme(store.themes.opencode, store.mode)
+      return resolveTheme(store.themes[DEFAULT_THEME], store.mode)
     })
 
     createEffect(() => renderer.setBackgroundColor(values().background))
@@ -293,7 +291,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       set(theme: string) {
         if (!hasTheme(theme)) return false
         setStore("active", theme)
-        kv.set("theme", theme)
+        kv.set("decode_theme", theme)
         return true
       },
       get ready() {

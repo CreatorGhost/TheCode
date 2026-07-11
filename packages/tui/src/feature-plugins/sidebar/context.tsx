@@ -34,17 +34,34 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     }
   })
 
+  const bar = createMemo(() => {
+    const filled = Math.min(BAR_WIDTH, Math.round(((state().percent ?? 0) / 100) * BAR_WIDTH))
+    return { filled, rest: BAR_WIDTH - filled }
+  })
+
   return (
     <box>
-      <text fg={theme().text}>
-        <b>Context</b>
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={theme().textMuted}>CONTEXT</text>
+        <text fg={theme().primary}>{state().percent ?? 0}%</text>
+      </box>
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={theme().textMuted}>tokens</text>
+        <text fg={theme().text}>{state().tokens.toLocaleString()}</text>
+      </box>
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={theme().textMuted}>spent</text>
+        <text fg={theme().text}>{money.format(cost())}</text>
+      </box>
+      <text>
+        <span style={{ fg: theme().primary }}>{"━".repeat(bar().filled)}</span>
+        <span style={{ fg: theme().backgroundElement }}>{"━".repeat(bar().rest)}</span>
       </text>
-      <text fg={theme().textMuted}>{state().tokens.toLocaleString()} tokens</text>
-      <text fg={theme().textMuted}>{state().percent ?? 0}% used</text>
-      <text fg={theme().textMuted}>{money.format(cost())} spent</text>
     </box>
   )
 }
+
+const BAR_WIDTH = 24
 
 const tui: TuiPlugin = async (api) => {
   api.slots.register({

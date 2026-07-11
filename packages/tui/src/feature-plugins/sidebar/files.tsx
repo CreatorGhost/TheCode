@@ -19,13 +19,19 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   return (
     <Show when={list().length > 0}>
       <box>
-        <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
-          <Show when={list().length > 2}>
-            <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
-          </Show>
-          <text fg={theme().text}>
-            <b>Modified Files</b>
-          </text>
+        <box
+          flexDirection="row"
+          gap={1}
+          justifyContent="space-between"
+          onMouseDown={() => list().length > 2 && setOpen((x) => !x)}
+        >
+          <box flexDirection="row" gap={1}>
+            <Show when={list().length > 2}>
+              <text fg={theme().textMuted}>{open() ? "▼" : "▶"}</text>
+            </Show>
+            <text fg={theme().textMuted}>MODIFIED FILES</text>
+          </box>
+          <text fg={theme().primary}>{list().length}</text>
         </box>
         <Show when={list().length <= 2 || open()}>
           <For each={list()}>

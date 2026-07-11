@@ -29,17 +29,22 @@ function View(props: { api: TuiPluginApi }) {
   return (
     <Show when={list().length > 0}>
       <box>
-        <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
-          <Show when={list().length > 2}>
-            <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
-          </Show>
-          <text fg={theme().text}>
-            <b>MCP</b>
-            <Show when={!open()}>
-              <span style={{ fg: theme().textMuted }}>
-                {" "}
-                ({on()} active{bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""})
-              </span>
+        <box
+          flexDirection="row"
+          gap={1}
+          justifyContent="space-between"
+          onMouseDown={() => list().length > 2 && setOpen((x) => !x)}
+        >
+          <box flexDirection="row" gap={1}>
+            <Show when={list().length > 2}>
+              <text fg={theme().textMuted}>{open() ? "▼" : "▶"}</text>
+            </Show>
+            <text fg={theme().textMuted}>MCP</text>
+          </box>
+          <text>
+            <span style={{ fg: theme().primary }}>{on()} connected</span>
+            <Show when={bad() > 0}>
+              <span style={{ fg: theme().error }}> · {bad()} failed</span>
             </Show>
           </text>
         </box>

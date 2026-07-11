@@ -81,14 +81,12 @@ describe("installation", () => {
         githubCalls.push(request.url)
         return jsonResponse({ tag_name: "v1.2.3" })
       }),
-    ).effect(
-      "reads release version from GitHub releases",
-      () =>
-        Effect.gen(function* () {
-          const result = yield* Installation.use.latest("unknown")
-          expect(result).toBe("1.2.3")
-          expect(githubCalls).toContain("https://api.github.com/repos/CreatorGhost/TheCode/releases/latest")
-        }),
+    ).effect("reads release version from GitHub releases", () =>
+      Effect.gen(function* () {
+        const result = yield* Installation.use.latest("unknown")
+        expect(result).toBe("1.2.3")
+        expect(githubCalls).toContain("https://api.github.com/repos/CreatorGhost/TheCode/releases/latest")
+      }),
     )
 
     testEffect(testLayer(() => jsonResponse({ tag_name: "v4.0.0-beta.1" }))).effect(
@@ -99,7 +97,6 @@ describe("installation", () => {
           expect(result).toBe("4.0.0-beta.1")
         }),
     )
-
   })
 
   describe("upgrade", () => {

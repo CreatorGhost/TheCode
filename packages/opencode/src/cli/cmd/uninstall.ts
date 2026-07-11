@@ -123,7 +123,6 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
   if (targets.shellConfig) {
     prompts.log.info(`  ✓ Shell PATH in ${shortenPath(targets.shellConfig)}`)
   }
-
 }
 
 async function executeUninstall(method: Installation.Method, targets: RemovalTargets) {

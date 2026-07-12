@@ -47,6 +47,21 @@ export const AttachCommand = cmd({
         describe: "start the minimal interactive interface",
         default: false,
       })
+      .option("auto", {
+        type: "boolean",
+        describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
+        default: false,
+      })
+      .option("yolo", {
+        type: "boolean",
+        hidden: true,
+        default: false,
+      })
+      .option("dangerously-skip-permissions", {
+        type: "boolean",
+        hidden: true,
+        default: false,
+      })
       .option("replay", {
         type: "boolean",
         hidden: true,
@@ -90,6 +105,7 @@ export const AttachCommand = cmd({
         fork: args.fork,
         replay: noReplay ? false : undefined,
         replayLimit: args.replayLimit,
+        auto: args.auto || args.yolo || args["dangerously-skip-permissions"],
       })
       return
     }
@@ -139,6 +155,7 @@ export const AttachCommand = cmd({
           continue: args.continue,
           sessionID: args.session,
           fork: args.fork,
+          auto: args.auto || args.yolo || args["dangerously-skip-permissions"],
         },
         directory,
         headers,

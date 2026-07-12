@@ -78,6 +78,9 @@ type StreamInput = {
   footer: FooterApi
   trace?: Trace
   signal?: AbortSignal
+  // Auto-approve (YOLO): reply "once" to every permission request instead of
+  // surfacing a prompt. Questions still block; explicit deny rules still win.
+  auto?: boolean
 }
 
 type Wait = {
@@ -519,6 +522,14 @@ function createLayer(input: StreamInput) {
           }
 
           if (event.properties.sessionID !== input.sessionID && !state.subagent.tabs.has(event.properties.sessionID)) {
+            return
+          }
+
+          // YOLO: auto-approve permission requests without surfacing a prompt.
+          // Questions are left to the user; explicit deny rules already reject
+          // server-side before a permission.asked is ever emitted.
+          if (input.auto && event.type === "permission.asked") {
+            void input.sdk.permission.reply({ requestID: event.properties.id, reply: "once" }).catch(() => {})
             return
           }
 

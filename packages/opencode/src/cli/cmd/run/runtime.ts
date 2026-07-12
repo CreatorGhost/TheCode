@@ -55,6 +55,7 @@ type RunRuntimeInput = {
   replay?: boolean
   replayLimit?: number
   demo?: RunInput["demo"]
+  auto?: boolean
 }
 
 type RunLocalInput = {
@@ -74,6 +75,7 @@ type RunLocalInput = {
   replay?: boolean
   replayLimit?: number
   demo?: RunInput["demo"]
+  auto?: boolean
 }
 
 type StreamTransportModule = Pick<
@@ -483,6 +485,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         providers: () => state.providers,
         footer,
         trace: log,
+        auto: input.auto,
       })
       if (footer.isClosed) {
         await handle.close()
@@ -748,6 +751,7 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
     replay: input.replay,
     replayLimit: input.replayLimit,
     demo: input.demo,
+    auto: input.auto,
     resolveSession: () => {
       if (session) {
         return session
@@ -797,6 +801,7 @@ export async function runInteractiveMode(
       replay: input.replay,
       replayLimit: input.replayLimit,
       demo: input.demo,
+      auto: input.auto,
       boot: async () => ({
         sdk: input.sdk,
         directory: input.directory,

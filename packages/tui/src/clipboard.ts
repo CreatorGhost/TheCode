@@ -1,11 +1,25 @@
 import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { mkdirSync, rmSync } from "node:fs"
 import { access, readFile, rm } from "node:fs/promises"
 import { platform, release, tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 
 const exec = promisify(execFile)
+
+// Clipboard image reads return a file path so path-based MCP tools can read it,
+// so the temp file must outlive read(). To avoid leaking one PNG per paste, they
+// go in a single per-process dir that is removed when the process exits.
+let clipboardImageDir: string | undefined
+function clipboardImagePath() {
+  if (!clipboardImageDir) {
+    clipboardImageDir = path.join(tmpdir(), `opencode-clipboard-${randomUUID()}`)
+    mkdirSync(clipboardImageDir, { recursive: true })
+    process.once("exit", () => rmSync(clipboardImageDir!, { recursive: true, force: true }))
+  }
+  return path.join(clipboardImageDir, `${randomUUID()}.png`)
+}
 
 function command(command: string, args: string[] = [], input?: string) {
   return new Promise<Buffer>((resolve, reject) => {
@@ -59,7 +73,7 @@ export async function read() {
     const filePath = await readClipboardFilePath()
     if (filePath) return { data: filePath, mime: "text/plain" }
 
-    const file = path.join(tmpdir(), `opencode-clipboard-${randomUUID()}.png`)
+    const file = clipboardImagePath()
     try {
       await exec("osascript", [
         "-e",

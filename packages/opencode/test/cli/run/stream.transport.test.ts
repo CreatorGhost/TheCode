@@ -760,6 +760,30 @@ describe("run stream transport", () => {
     })
 
     try {
+      // Processed in order: a foreign-session permission and a question are pushed
+      // BEFORE the real request, so by the time the real reply fires they've already
+      // been handled — proving neither was auto-approved.
+      src.push({
+        id: "evt-perm-foreign",
+        type: "permission.asked",
+        properties: {
+          id: "perm-foreign",
+          sessionID: "session-other",
+          permission: "edit",
+          patterns: ["src/other.ts"],
+          metadata: {},
+          always: [],
+        },
+      } satisfies SdkEvent)
+      src.push({
+        id: "evt-question-1",
+        type: "question.asked",
+        properties: {
+          id: "que-1",
+          sessionID: "session-1",
+          questions: [{ question: "Proceed?", header: "confirm", options: [{ label: "Yes", description: "go" }] }],
+        },
+      } satisfies SdkEvent)
       src.push({
         id: "evt-perm-1",
         type: "permission.asked",
@@ -774,6 +798,9 @@ describe("run stream transport", () => {
       } satisfies SdkEvent)
 
       await waitFor(() => (replySpy.mock.calls.length > 0 ? true : undefined))
+      // Only the in-session permission is auto-approved; questions still block and a
+      // foreign session is never auto-replied.
+      expect(replySpy).toHaveBeenCalledTimes(1)
       expect(replySpy).toHaveBeenCalledWith({ requestID: "perm-1", reply: "once" })
     } finally {
       src.close()

@@ -745,6 +745,42 @@ describe("run stream transport", () => {
     }
   })
 
+  test("auto mode replies once to permission requests without prompting", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const client = sdk({ stream: src.stream })
+    const replySpy = spyOn(client.permission, "reply").mockImplementation(() => ok(undefined) as never)
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+      auto: true,
+    })
+
+    try {
+      src.push({
+        id: "evt-perm-1",
+        type: "permission.asked",
+        properties: {
+          id: "perm-1",
+          sessionID: "session-1",
+          permission: "edit",
+          patterns: ["src/foo.ts"],
+          metadata: {},
+          always: [],
+        },
+      } satisfies SdkEvent)
+
+      await waitFor(() => (replySpy.mock.calls.length > 0 ? true : undefined))
+      expect(replySpy).toHaveBeenCalledWith({ requestID: "perm-1", reply: "once" })
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
   test("rebuilds session output on resize and continues live deltas from replayed state", async () => {
     const src = eventFeed()
     const ui = footer()

@@ -892,6 +892,7 @@ export const RunCommand = effectCmd({
             thinking,
             backgroundSubagents: flags.experimentalBackgroundSubagents,
             demo: args.demo,
+            auto,
           })
         } catch (error) {
           dieInteractive(error)
@@ -929,6 +930,7 @@ export const RunCommand = effectCmd({
             thinking,
             backgroundSubagents: flags.experimentalBackgroundSubagents,
             demo: args.demo,
+            auto,
           })
         } catch (error) {
           dieInteractive(error)
@@ -972,6 +974,7 @@ type MiniCommandInput = {
   replay?: boolean
   replayLimit?: number
   demo?: boolean
+  auto?: boolean
 }
 
 export async function runMini(input: MiniCommandInput) {
@@ -1002,7 +1005,7 @@ export async function runMini(input: MiniCommandInput) {
     replay: input.replay ?? true,
     "replay-limit": input.replayLimit,
     replayLimit: input.replayLimit,
-    auto: false,
+    auto: input.auto ?? false,
     yolo: false,
     "dangerously-skip-permissions": false,
     dangerouslySkipPermissions: false,

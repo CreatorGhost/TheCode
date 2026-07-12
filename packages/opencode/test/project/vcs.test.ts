@@ -375,6 +375,26 @@ describe("Vcs diff", () => {
   )
 
   it.instance(
+    "diff('git') handles special filenames with no HEAD via untracked batching",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* write(path.join(test.directory, weird), "hello\n")
+
+        // No commit => no HEAD => routes through diffUntracked, which passes the
+        // filename as a NUL-delimited `:(top,literal)` pathspec. This exercises the
+        // escaping path that the has-HEAD "special filenames" test above does not.
+        const vcs = yield* init()
+        const diff = yield* vcs.diff("git")
+        const entry = diff.find((item) => item.file === weird)
+
+        expect(entry).toEqual(expect.objectContaining({ file: weird, additions: 1, deletions: 0, status: "added" }))
+        expect(entry?.patch).toContain("+hello")
+      }),
+    { init: (directory) => git(directory, ["init"]) },
+  )
+
+  it.instance(
     "diff('git') keeps batched patches aligned for type changes",
     () =>
       Effect.gen(function* () {

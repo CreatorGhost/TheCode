@@ -323,11 +323,17 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const env = { GIT_INDEX_FILE: path.join(dir, "index") }
 
-            yield* run(["add", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], {
+            // Fail closed: if intent-to-add fails (index lock, unreadable pathspec) the temp
+            // index is unreliable, so return an empty batch and let the caller fall back to
+            // per-file native patches rather than silently reporting no untracked changes.
+            const added = yield* run(["add", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], {
               cwd,
               env,
               stdin: pathspecs(files),
             })
+            if (added.exitCode !== 0) {
+              return { patch: { text: "", truncated: false }, stats: [] } satisfies { patch: Patch; stats: Stat[] }
+            }
 
             const [patch, stats] = yield* Effect.all(
               [

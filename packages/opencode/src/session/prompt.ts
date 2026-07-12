@@ -1358,10 +1358,18 @@ const layer = Layer.effect(
       },
     )
 
-    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = (input: LoopInput) =>
-      state
-        .ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
-        .pipe(
+    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
+      input: LoopInput,
+    ) {
+      // Wrap the forked work (runLoop) — not the ensureRunning caller — so every
+      // prompt (idle or queued/steered) gets its own root trace and its child spans
+      // are parented correctly. ensureRunning may store `work` and start it later
+      // from a prior run's fiber, so a span on the caller would mis-parent queued
+      // prompts and measure queue-wait instead of the agent turn.
+      return yield* state.ensureRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        runLoop(input.sessionID).pipe(
           Effect.withSpan("invoke_agent", {
             root: true,
             attributes: {
@@ -1370,7 +1378,9 @@ const layer = Layer.effect(
               "session.id": input.sessionID,
             },
           }),
-        )
+        ),
+      )
+    })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",

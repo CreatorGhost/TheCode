@@ -199,16 +199,21 @@ export const {
     // together on a short interval instead.
     const pendingDeltas = new Map<string, { messageID: string; partID: string; field: string; delta: string }>()
     let deltaTimer: ReturnType<typeof setTimeout> | undefined
-    const dropPendingDeltas = (messageID: string, partID: string) => {
+    // Apply buffered deltas to the store. With no argument, flush everything (timer
+    // tick, stream completion). With a part, flush only that part's buffered deltas —
+    // used before applying a full snapshot so accumulated text is committed rather
+    // than discarded.
+    const flushDeltas = (only?: { messageID: string; partID: string }) => {
+      if (only === undefined && deltaTimer) {
+        clearTimeout(deltaTimer)
+        deltaTimer = undefined
+      }
       if (!pendingDeltas.size) return
-      const prefix = `${messageID}|${partID}|`
-      for (const key of pendingDeltas.keys()) if (key.startsWith(prefix)) pendingDeltas.delete(key)
-    }
-    const flushDeltas = () => {
-      deltaTimer = undefined
-      if (!pendingDeltas.size) return
+      const prefix = only ? `${only.messageID}|${only.partID}|` : undefined
       batch(() => {
-        for (const pending of pendingDeltas.values()) {
+        for (const [key, pending] of [...pendingDeltas.entries()]) {
+          if (prefix && !key.startsWith(prefix)) continue
+          pendingDeltas.delete(key)
           const parts = store.part[pending.messageID]
           if (!parts) continue
           const result = search(parts, pending.partID, (p) => p.id)
@@ -224,7 +229,6 @@ export const {
             }),
           )
         }
-        pendingDeltas.clear()
       })
     }
 
@@ -369,11 +373,17 @@ export const {
         }
 
         case "session.status": {
+          // When a session goes idle the stream is done; flush any buffered deltas so
+          // a stream that ended on a delta (no trailing snapshot) isn't truncated.
+          if (event.properties.status.type === "idle") flushDeltas()
           setStore("session_status", event.properties.sessionID, event.properties.status)
           break
         }
 
         case "message.updated": {
+          // A completed assistant message ends its stream; flush buffered deltas so
+          // trailing streamed text is committed even without a final snapshot.
+          if (event.properties.info.role === "assistant" && event.properties.info.time?.completed) flushDeltas()
           if (event.properties.info.role === "user") {
             const optimisticID = optimisticBySession.get(event.properties.info.sessionID)
             if (optimisticID && optimisticID !== event.properties.info.id) {
@@ -435,8 +445,9 @@ export const {
           break
         }
         case "message.part.updated": {
-          // full snapshot supersedes any buffered deltas for this part
-          dropPendingDeltas(event.properties.part.messageID, event.properties.part.id)
+          // Commit this part's buffered deltas before the full snapshot reconciles,
+          // so accumulated streamed text is preserved rather than discarded.
+          flushDeltas({ messageID: event.properties.part.messageID, partID: event.properties.part.id })
           touchPart(event.properties.part.sessionID, event.properties.part.id)
           const parts = store.part[event.properties.part.messageID]
           if (!parts) {

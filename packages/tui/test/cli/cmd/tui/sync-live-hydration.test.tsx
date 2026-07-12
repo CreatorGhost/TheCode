@@ -390,3 +390,92 @@ test("hydration returning the real user message drops the optimistic duplicate",
     app.renderer.destroy()
   }
 })
+
+const streaming = { ...assistant, time: { created: 1 } }
+
+async function mountSimple(tmpPath: string) {
+  return mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmpPath)
+}
+
+function partText(sync: Awaited<ReturnType<typeof mountSimple>>["sync"]) {
+  const part = sync.data.part[messageID]?.[0]
+  return part && "text" in part ? part.text : undefined
+}
+
+test("a completed assistant message does not lose a trailing buffered delta", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const { app, emit, sync } = await mountSimple(tmp.path)
+  try {
+    emit(global({ id: "m0", type: "message.updated", properties: { sessionID, info: streaming } }))
+    emit(
+      global({
+        id: "p0",
+        type: "message.part.updated",
+        properties: { sessionID, time: 1, part: { id: partID, sessionID, messageID, type: "text", text: "Hi" } },
+      }),
+    )
+    await wait(() => sync.data.part[messageID]?.[0]?.type === "text")
+
+    // Stream a delta then complete the message. The completion flush commits the
+    // trailing delta rather than dropping it; the final text must include it.
+    emit(
+      global({
+        id: "d0",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: " there" },
+      }),
+    )
+    emit(global({ id: "m1", type: "message.updated", properties: { sessionID, info: assistant } }))
+    await wait(() => partText(sync) === "Hi there")
+    expect(partText(sync)).toBe("Hi there")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a full snapshot after a buffered delta reconciles without losing text", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const { app, emit, sync } = await mountSimple(tmp.path)
+  try {
+    emit(global({ id: "m0", type: "message.updated", properties: { sessionID, info: streaming } }))
+    emit(
+      global({
+        id: "p0",
+        type: "message.part.updated",
+        properties: { sessionID, time: 1, part: { id: partID, sessionID, messageID, type: "text", text: "Hi" } },
+      }),
+    )
+    await wait(() => sync.data.part[messageID]?.[0]?.type === "text")
+
+    // Delta then a monotonic snapshot carrying the accumulated text: the buffered
+    // delta is committed before the snapshot reconciles, so nothing is lost.
+    emit(
+      global({
+        id: "d0",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: " there" },
+      }),
+    )
+    emit(
+      global({
+        id: "p1",
+        type: "message.part.updated",
+        properties: {
+          sessionID,
+          time: 2,
+          part: { id: partID, sessionID, messageID, type: "text", text: "Hi there!" },
+        },
+      }),
+    )
+    await wait(() => partText(sync) === "Hi there!")
+    expect(partText(sync)).toBe("Hi there!")
+  } finally {
+    app.renderer.destroy()
+  }
+})

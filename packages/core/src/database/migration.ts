@@ -21,6 +21,23 @@ export function apply(db: Database) {
       const tables = yield* db.all<{ name: string }>(
         sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
       )
+      if (tables.some((table) => table.name === "migration")) {
+        // A newer build may have migrated this database already. Running old
+        // SQL against a newer schema fails at query time with an opaque
+        // "SQL logic error", so refuse upfront. Unknown ids sorting before our
+        // newest migration are retired ids (e.g. 20260530232709_lovely_romulus)
+        // and stay allowed.
+        const known = new Set(migrations.map((migration) => migration.id))
+        const latest = migrations.reduce((max, migration) => (migration.id > max ? migration.id : max), "")
+        const newer = (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`))
+          .map((row) => row.id)
+          .filter((id) => !known.has(id) && id > latest)
+          .sort()
+        if (newer.length > 0)
+          return yield* Effect.die(
+            `Database was migrated by a newer version of opencode (unknown migration: ${newer[newer.length - 1]}). Refusing to start against a newer schema; please update this installation.`,
+          )
+      }
       if (tables.some((table) => table.name === "session")) return yield* applyOnly(db, migrations)
       if (tables.length > 0) return yield* Effect.die("Database is not empty and has no session table")
       yield* db.transaction((tx) =>

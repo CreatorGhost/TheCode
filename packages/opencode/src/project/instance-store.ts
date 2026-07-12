@@ -105,7 +105,17 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
           yield* clearInFlight(directory, entry)
         }
         yield* Deferred.done(entry.deferred, exit).pipe(Effect.asVoid)
-      })
+      }).pipe(
+        // Guarantee the deferred is settled even if this fiber is interrupted before
+        // Deferred.done runs (e.g. the owning layer scope closes mid-init). Otherwise
+        // cross-store joiners parked on entry.deferred would hang forever. Settling an
+        // already-settled deferred is a no-op, so the normal (success/failure) paths are
+        // unaffected. A concrete failure exit is used rather than Deferred.interrupt
+        // because the latter does not reliably wake joiners parked from another store.
+        Effect.ensuring(
+          Deferred.done(entry.deferred, Exit.die(new Error("instance initialization interrupted"))).pipe(Effect.asVoid),
+        ),
+      )
 
     const emitDisposed = (input: { directory: string; project?: string }) =>
       Effect.sync(() =>

@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { Context, Deferred, Effect, Fiber, Layer } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { registerDisposer } from "../../src/effect/instance-registry"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
@@ -152,6 +152,90 @@ describe("InstanceStore", () => {
       const [firstCtx, secondCtx] = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
       expect(secondCtx).toBe(firstCtx)
       expect(initialized).toBe(1)
+    }),
+  )
+
+  it.live("refcounts disposal so a shared instance survives until the last owner disposes", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      // Two genuinely independent stores (separate memo maps) that share only the
+      // module-global in-flight map, so the second load joins via `inFlight` and
+      // becomes a co-owner of the shared entry.
+      const firstStoreScope = yield* Scope.make()
+      const secondStoreScope = yield* Scope.make()
+      const firstContext = yield* Layer.buildWithMemoMap(storeLayer(), Layer.makeMemoMapUnsafe(), firstStoreScope)
+      const secondContext = yield* Layer.buildWithMemoMap(storeLayer(), Layer.makeMemoMapUnsafe(), secondStoreScope)
+      const firstStore = Context.get(firstContext, InstanceStore.Service)
+      const secondStore = Context.get(secondContext, InstanceStore.Service)
+      const disposed: Array<string> = []
+      yield* registerDisposerScoped(async (directory) => {
+        disposed.push(directory)
+      })
+
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined)
+          yield* Deferred.await(release)
+        }),
+      )
+      const first = yield* firstStore.load({ directory: dir }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      const second = yield* secondStore.load({ directory: dir }).pipe(Effect.forkScoped)
+      // Cross-store dedup happens via the module-global in-flight map, which is only
+      // populated while init is in flight. Let the second load park on the shared entry
+      // (becoming a co-owner) before releasing init; otherwise it would race the
+      // in-flight cleanup and build its own instance.
+      yield* Effect.sleep("100 millis")
+      yield* Deferred.succeed(release, undefined)
+      const [firstCtx, secondCtx] = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+      expect(secondCtx).toBe(firstCtx)
+
+      // Disposing via the first store leaves the second store as an owner: not disposed.
+      yield* firstStore.dispose(firstCtx)
+      expect(disposed).toEqual([])
+
+      // Disposing via the last owner disposes exactly once.
+      yield* secondStore.dispose(secondCtx)
+      expect(disposed).toEqual([dir])
+
+      yield* Scope.close(firstStoreScope, Exit.void)
+      yield* Scope.close(secondStoreScope, Exit.void)
+    }),
+  )
+
+  it.live("interrupting an in-flight init settles the deferred instead of hanging joiners", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      // Build the store in a scope we can close to interrupt its in-flight init fiber.
+      // buildWithMemoMap binds the store's resources (including the forked init fiber)
+      // to storeScope, so Scope.close interrupts the init. Any caller — including a
+      // cross-store joiner parked on the shared entry.deferred — must then settle with a
+      // failure rather than hang forever.
+      const storeScope = yield* Scope.make()
+      const storeContext = yield* Layer.buildWithMemoMap(storeLayer(), Layer.makeMemoMapUnsafe(), storeScope)
+      const store = Context.get(storeContext, InstanceStore.Service)
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined)
+          yield* Deferred.await(release) // never released: init stays in flight
+        }),
+      )
+      const loader = yield* store.load({ directory: dir }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+
+      // Tear down the store that owns the in-flight init fiber.
+      yield* Scope.close(storeScope, Exit.void)
+
+      const outcome = yield* Fiber.join(loader).pipe(
+        Effect.as("ok" as const),
+        Effect.catchCause(() => Effect.succeed("failed" as const)),
+        Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.succeed("hung" as const) }),
+      )
+      expect(outcome).toBe("failed")
     }),
   )
 

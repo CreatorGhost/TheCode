@@ -7,6 +7,10 @@ on:
         description: Version to publish without the leading v (e.g. 1.18.0)
         required: true
         type: string
+      channel:
+        description: npm dist-tag / channel (latest for stable, e.g. beta for previews)
+        type: string
+        default: latest
       dry_run:
         description: Build and validate without publishing to npm
         type: boolean
@@ -46,11 +50,15 @@ jobs:
             echo "NPM_TOKEN secret is not set" >&2
             exit 1
           fi
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$HOME/.npmrc"
+          # Pin the registry so publish can't be redirected by a repo/workspace .npmrc.
+          {
+            echo "registry=https://registry.npmjs.org/"
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}"
+          } > "$HOME/.npmrc"
 
       - name: Build and publish to npm
         working-directory: packages/opencode
         env:
-          OPENCODE_CHANNEL: latest
+          OPENCODE_CHANNEL: ${{ inputs.channel }}
           OPENCODE_VERSION: ${{ inputs.version }}
         run: bun run script/publish.ts ${{ inputs.dry_run && '--dry-run' || '' }}

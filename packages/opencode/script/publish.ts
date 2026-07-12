@@ -3,7 +3,10 @@
 // Publishes the DCode CLI to npm as an esbuild-style package: one thin wrapper
 // (`dcode-ai`) plus a per-platform binary package for every build target
 // (`dcode-ai-<os>-<arch>[-baseline][-musl]`). npm installs only the platform
-// package matching the user's os/cpu, and the wrapper's bin/dcode shim execs it.
+// package matching the user's os/cpu, and the wrapper's bin/dcode shim resolves
+// and execs it at runtime (pure optionalDependencies, no postinstall step). If a
+// platform's optional dependency fails to install, the shim prints the exact
+// package name to install manually.
 //
 //   OPENCODE_VERSION=1.2.3 OPENCODE_CHANNEL=latest bun run script/publish.ts
 //   bun run script/publish.ts --dry-run          # validate without publishing
@@ -29,13 +32,35 @@ const { binaries } = await import("./build.ts")
 const NPM_NAME = "dcode-ai"
 const version = Script.version
 const dryRun = process.argv.includes("--dry-run")
+const single = process.argv.includes("--single")
 // Preview channels publish under their channel dist-tag so they never become the
 // default `npm install dcode-ai`.
 const tag = Script.channel === "latest" ? "latest" : Script.channel
 const flags = ["--access", "public", "--tag", tag, ...(dryRun ? ["--dry-run"] : [])]
 
+// A real publish must build every platform (a --single wrapper would only install
+// on one OS/arch) and carry an explicit version (never the 0.0.0 fallback).
+if (!dryRun && single) throw new Error("--single builds one platform; it is only valid with --dry-run")
+if (!dryRun && !process.env["OPENCODE_VERSION"]) throw new Error("set OPENCODE_VERSION for a real publish")
+
 const names = Object.keys(binaries)
 if (names.length === 0) throw new Error("build produced no binaries")
+
+// npm forbids republishing an existing version. Skip already-published packages so
+// a re-run after a partial failure is idempotent instead of 403-aborting.
+const alreadyPublished = async (name: string) => {
+  if (dryRun) return false
+  const res = await fetch(`https://registry.npmjs.org/${name}/${version}`)
+  return res.ok
+}
+const publish = async (pkgDir: string, name: string) => {
+  if (await alreadyPublished(name)) {
+    console.log(`skipping ${name}@${version} (already published)`)
+    return
+  }
+  console.log(`publishing ${name}@${version}`)
+  await $`npm publish ${flags}`.cwd(pkgDir)
+}
 
 // Map each built target (dcode-<...>) to its published npm name (dcode-ai-<...>).
 const npmNameFor = (built: string) => built.replace(/^dcode-/, `${NPM_NAME}-`)
@@ -51,8 +76,7 @@ for (const built of names) {
   pkgJson.license = "MIT"
   pkgJson.repository = { type: "git", url: "git+https://github.com/CreatorGhost/TheCode.git" }
   fs.writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2))
-  console.log(`publishing ${npmName}@${version}`)
-  await $`npm publish ${flags}`.cwd(pkgDir)
+  await publish(pkgDir, npmName)
   optionalDependencies[npmName] = version
 }
 
@@ -73,7 +97,7 @@ fs.writeFileSync(
       name: NPM_NAME,
       version,
       description: "DCode — an AI coding agent for the terminal (fork of opencode)",
-      bin: { dcode: "./bin/dcode" },
+      bin: { dcode: "bin/dcode" },
       optionalDependencies,
       license: "MIT",
       repository: { type: "git", url: "git+https://github.com/CreatorGhost/TheCode.git" },
@@ -87,7 +111,6 @@ fs.writeFileSync(
   ),
 )
 
-console.log(`publishing ${NPM_NAME}@${version}`)
-await $`npm publish ${flags}`.cwd(wrapperDir)
+await publish(wrapperDir, NPM_NAME)
 
 console.log(dryRun ? "dry run complete" : `published ${NPM_NAME}@${version} (${names.length} platform packages)`)

@@ -324,3 +324,66 @@ test("optimistic user message survives new session hydration race", async () => 
     app.renderer.destroy()
   }
 })
+
+test("hydration returning the real user message drops the optimistic duplicate", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+  const userText = "What is Rust?"
+  const realUserID = "msg_user"
+  const realUserPartID = "prt_user"
+  const realUser = {
+    id: realUserID,
+    sessionID,
+    role: "user" as const,
+    agent: "build",
+    model: { providerID: "test", modelID: "model" },
+    time: { created: 1 },
+  }
+  let resolveMessages!: (response: Response) => void
+  const messages = new Promise<Response>((resolve) => {
+    resolveMessages = resolve
+  })
+  let requested = false
+  const { app, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) {
+      requested = true
+      return messages
+    }
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmp.path)
+
+  try {
+    sync.session.optimisticUserMessage({
+      sessionID,
+      text: userText,
+      agent: "build",
+      model: { providerID: "test", modelID: "model" },
+    })
+    const optimisticUserID = sync.data.message[sessionID]!.find((message) => message.role === "user")!.id
+    expect(optimisticUserID.startsWith("opt_")).toBe(true)
+
+    const hydrate = sync.session.sync(sessionID)
+    await wait(() => requested)
+
+    // Server has now persisted the real user message; the hydration response
+    // carries both it and the assistant reply.
+    resolveMessages(
+      json([
+        { info: realUser, parts: [{ id: realUserPartID, sessionID, messageID: realUserID, type: "text", text: userText }] },
+        { info: assistant, parts: [{ id: partID, sessionID, messageID, type: "text", text: "Hi!" }] },
+      ]),
+    )
+    await hydrate
+
+    const userMessages = (sync.data.message[sessionID] ?? []).filter((message) => message.role === "user")
+    expect(userMessages).toHaveLength(1)
+    expect(userMessages[0]!.id).toBe(realUserID)
+    // The optimistic placeholder and its parts must be gone.
+    expect(sync.data.part[optimisticUserID]).toBeUndefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})

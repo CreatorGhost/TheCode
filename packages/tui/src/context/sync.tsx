@@ -638,7 +638,22 @@ export const {
                 draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
                 const optimisticID = optimisticBySession.get(sessionID)
-                const optimisticIDs = optimisticID ? new Set([optimisticID]) : new Set<string>()
+                // Once the server has persisted the real first user message, drop the
+                // optimistic placeholder — otherwise both the real and the optimistic
+                // user message render as duplicates. clearOptimisticUserMessage's message
+                // removal is handled by the `visible` replacement below; here we only need
+                // to forget the id and clean up its parts.
+                const optimisticSuperseded =
+                  optimisticID !== undefined &&
+                  (messages.data ?? []).some(
+                    (message) => message.info.role === "user" && message.info.id !== optimisticID,
+                  )
+                if (optimisticID !== undefined && optimisticSuperseded) {
+                  optimisticBySession.delete(sessionID)
+                  delete draft.part[optimisticID]
+                }
+                const optimisticIDs =
+                  optimisticID && !optimisticSuperseded ? new Set([optimisticID]) : new Set<string>()
                 const infos = (messages.data ?? []).flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]
                   const current = currentMessages.find((item) => item.id === message.info.id)

@@ -70,7 +70,7 @@ let arch = archMap[os.arch()]
 if (!arch) {
   arch = os.arch()
 }
-const base = "dcode-" + platform + "-" + arch
+const base = "dcode-ai-" + platform + "-" + arch
 const binary = platform === "windows" ? "dcode.exe" : "dcode"
 
 function supportsAvx2() {

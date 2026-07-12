@@ -34,12 +34,13 @@ const IS_PREVIEW = CHANNEL !== "latest"
 const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
   if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
-  const version = await fetch("https://registry.npmjs.org/opencode-ai/latest")
-    .then((res) => {
-      if (!res.ok) throw new Error(res.statusText)
-      return res.json()
-    })
+  // Latest channel without an explicit OPENCODE_VERSION: bump the last published
+  // dcode-ai release. Falls back to 0.0.0 for the very first publish (before the
+  // package exists on npm). In CI the publish workflow always sets OPENCODE_VERSION.
+  const version = await fetch("https://registry.npmjs.org/dcode-ai/latest")
+    .then((res) => (res.ok ? res.json() : { version: "0.0.0" }))
     .then((data: any) => data.version)
+    .catch(() => "0.0.0")
   const [major, minor, patch] = version.split(".").map((x: string) => Number(x) || 0)
   const t = env.OPENCODE_BUMP?.toLowerCase()
   if (t === "major") return `${major + 1}.0.0`

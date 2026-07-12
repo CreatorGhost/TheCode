@@ -24,7 +24,7 @@ const archMap = {
 
 const platform = platformMap[os.platform()] ?? os.platform()
 const arch = archMap[os.arch()] ?? os.arch()
-const base = `dcode-${platform}-${arch}`
+const base = `dcode-ai-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "dcode.exe" : "dcode"
 const targetBinary = path.join(__dirname, "bin", "dcode.exe")
 

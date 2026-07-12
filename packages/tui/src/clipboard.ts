@@ -1,10 +1,25 @@
 import { execFile, spawn } from "node:child_process"
-import { readFile, rm } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { mkdirSync, rmSync } from "node:fs"
+import { access, readFile, rm } from "node:fs/promises"
 import { platform, release, tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 
 const exec = promisify(execFile)
+
+// Clipboard image reads return a file path so path-based MCP tools can read it,
+// so the temp file must outlive read(). To avoid leaking one PNG per paste, they
+// go in a single per-process dir that is removed when the process exits.
+let clipboardImageDir: string | undefined
+function clipboardImagePath() {
+  if (!clipboardImageDir) {
+    clipboardImageDir = path.join(tmpdir(), `opencode-clipboard-${randomUUID()}`)
+    mkdirSync(clipboardImageDir, { recursive: true })
+    process.once("exit", () => rmSync(clipboardImageDir!, { recursive: true, force: true }))
+  }
+  return path.join(clipboardImageDir, `${randomUUID()}.png`)
+}
 
 function command(command: string, args: string[] = [], input?: string) {
   return new Promise<Buffer>((resolve, reject) => {
@@ -26,9 +41,39 @@ function writeOsc52(text: string) {
   process.stdout.write(process.env.TMUX || process.env.STY ? `\x1bPtmux;\x1b${sequence}\x1b\\` : sequence)
 }
 
+async function readClipboardFilePath() {
+  // «class furl» reads public.file-url (Finder Cmd+C) and alias records as a file reference.
+  // Plain text is coercible too, so verify the path exists before trusting it.
+  try {
+    const result = await exec("osascript", [
+      "-e",
+      `try
+	set theFile to the clipboard as «class furl»
+	try
+		return POSIX path of theFile
+	on error
+		set fileList to theFile as list
+		return POSIX path of (item 1 of fileList)
+	end try
+on error
+	return ""
+end try`,
+    ])
+    const filePath = result.stdout.toString().trim()
+    if (!filePath) return undefined
+    await access(filePath)
+    return filePath
+  } catch {
+    return undefined
+  }
+}
+
 export async function read() {
   if (platform() === "darwin") {
-    const file = path.join(tmpdir(), "opencode-clipboard.png")
+    const filePath = await readClipboardFilePath()
+    if (filePath) return { data: filePath, mime: "text/plain" }
+
+    const file = clipboardImagePath()
     try {
       await exec("osascript", [
         "-e",
@@ -42,10 +87,8 @@ export async function read() {
         "-e",
         "close access fileRef",
       ])
-      return { data: (await readFile(file)).toString("base64"), mime: "image/png" }
+      return { data: (await readFile(file)).toString("base64"), mime: "image/png", path: file }
     } catch {
-      // Fall through to text clipboard.
-    } finally {
       await rm(file, { force: true }).catch(() => {})
     }
   }

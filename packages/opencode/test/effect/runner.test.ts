@@ -174,6 +174,7 @@ describe("Runner", () => {
       expect(Exit.isSuccess(exitC)).toBe(true)
       if (Exit.isSuccess(exitB)) expect(exitB.value).toBe("queued")
       if (Exit.isSuccess(exitC)) expect(exitC.value).toBe("queued")
+      expect(yield* Ref.get(calls)).toBe(1) // pending work runs once, shared by both callers
     }),
   )
 

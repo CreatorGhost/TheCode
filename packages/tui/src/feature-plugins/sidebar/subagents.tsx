@@ -1,7 +1,8 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { Session } from "@opencode-ai/sdk/v2"
-import { createMemo, createResource, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { useSync } from "../../context/sync"
+import { collectSubtree } from "../../routes/session"
 import type { BuiltinTuiPlugin } from "../builtins"
 
 const id = "internal:sidebar-subagents"
@@ -15,36 +16,15 @@ function title(item: Session) {
 function View(props: { api: TuiPluginApi; sessionID: string }) {
   const theme = () => props.api.theme.current
   const sync = useSync()
-  const [loaded, { refetch }] = createResource(
-    () => props.sessionID,
-    async (sessionID) => {
-      const result = await props.api.client.session.children({ sessionID }, { throwOnError: true })
-      return result.data ?? []
-    },
+  // The whole subagent subtree (nested subagents included), derived reactively from
+  // the store — no resource or manual event subscriptions needed. Exclude the root.
+  const children = createMemo(() =>
+    collectSubtree(sync.data.session, props.sessionID)
+      .filter((item) => item.id !== props.sessionID)
+      .toSorted((a, b) => a.time.created - b.time.created),
   )
-  const children = createMemo(() => {
-    const items = new Map<string, Session>()
-    for (const item of loaded() ?? []) items.set(item.id, item)
-    for (const item of sync.data.session) {
-      if (item.parentID === props.sessionID) items.set(item.id, item)
-    }
-    return [...items.values()].toSorted((a, b) => a.time.created - b.time.created)
-  })
-  const refresh = () => void refetch()
-  const stopUpdated = props.api.event.on("session.updated", (event) => {
-    if (event.properties.info.parentID !== props.sessionID) return
-    refresh()
-  })
-  const stopDeleted = props.api.event.on("session.deleted", (event) => {
-    if (!children().some((item) => item.id === event.properties.info.id)) return
-    refresh()
-  })
-  onCleanup(() => {
-    stopUpdated()
-    stopDeleted()
-  })
-  const running = () => children().filter((item) => sync.data.session_status[item.id]?.type !== "idle")
-  const idle = () => children().length - running().length
+  const running = createMemo(() => children().filter((item) => sync.data.session_status[item.id]?.type !== "idle"))
+  const idle = createMemo(() => children().length - running().length)
 
   return (
     <Show when={children().length > 0}>

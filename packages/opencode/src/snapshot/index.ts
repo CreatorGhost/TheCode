@@ -92,7 +92,10 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           },
           Effect.catch((err) =>
             Effect.succeed({
-              code: ChildProcessSpawner.ExitCode(1),
+              // -1 is a sentinel for "git failed to run at all". Callers that give
+              // exit code 1 a meaning (check-ignore: "none ignored") must not see
+              // spawn failures as code 1, otherwise fail-closed paths get bypassed.
+              code: ChildProcessSpawner.ExitCode(-1),
               text: "",
               stderr: err instanceof Error ? err.message : String(err),
             }),

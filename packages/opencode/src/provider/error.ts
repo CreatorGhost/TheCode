@@ -29,7 +29,9 @@ function isOpenAiErrorRetryable(e: APICallError) {
 
 // Providers not reliably handled in this function:
 // - z.ai: can accept overflow silently (needs token-count/context-window checks)
-const isHtmlMarkup = (value: string) => /<!doctype\s+html|<html[\s>]/i.test(value)
+// Anchored so a legitimate error message that merely mentions "<html>" isn't
+// misclassified as a gateway page (matches the executor's detector).
+const isHtmlMarkup = (value: string) => /^\s*<(!doctype\s+html|html[\s>])/i.test(value)
 
 function message(providerID: ProviderV2.ID, e: APICallError) {
   return iife(() => {
@@ -39,7 +41,7 @@ function message(providerID: ProviderV2.ID, e: APICallError) {
     // Never surface raw markup in TUI/retry notices (#35640 / #15406).
     if (isHtmlMarkup(msg)) {
       if (e.statusCode === 401) {
-        return "Unauthorized: request was blocked by a gateway or proxy. Your authentication token may be missing or expired — try running `opencode auth login <your provider URL>` to re-authenticate."
+        return "Unauthorized: request was blocked by a gateway or proxy. Your authentication token may be missing or expired — try running `dcode auth login <your provider URL>` to re-authenticate."
       }
       if (e.statusCode === 403) {
         return "Forbidden: request was blocked by a gateway or proxy. You may not have permission to access this resource — check your account and provider settings."

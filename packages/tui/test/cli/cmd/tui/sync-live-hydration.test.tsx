@@ -372,7 +372,10 @@ test("hydration returning the real user message drops the optimistic duplicate",
     // carries both it and the assistant reply.
     resolveMessages(
       json([
-        { info: realUser, parts: [{ id: realUserPartID, sessionID, messageID: realUserID, type: "text", text: userText }] },
+        {
+          info: realUser,
+          parts: [{ id: realUserPartID, sessionID, messageID: realUserID, type: "text", text: userText }],
+        },
         { info: assistant, parts: [{ id: partID, sessionID, messageID, type: "text", text: "Hi!" }] },
       ]),
     )

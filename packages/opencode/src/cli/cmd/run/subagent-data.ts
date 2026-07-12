@@ -876,6 +876,8 @@ export function reduceSubagentData(input: {
       event,
       thinking: input.thinking,
       limits: input.limits,
-    }) || cancelled || changed
+    }) ||
+    cancelled ||
+    changed
   )
 }

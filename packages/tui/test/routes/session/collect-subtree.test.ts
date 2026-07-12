@@ -41,10 +41,16 @@ describe("collectSubtree", () => {
       s({ id: "child-2", parentID: "root" }),
       s({ id: "grandchild-2", parentID: "child-2" }),
     ]
-    expect(collectSubtree(sessions, "root").map((x) => x.id).sort()).toEqual(
-      ["child-1", "child-2", "grandchild-1", "grandchild-2", "root"],
-    )
-    expect(collectSubtree(sessions, "child-1").map((x) => x.id).sort()).toEqual(["child-1", "grandchild-1"])
+    expect(
+      collectSubtree(sessions, "root")
+        .map((x) => x.id)
+        .sort(),
+    ).toEqual(["child-1", "child-2", "grandchild-1", "grandchild-2", "root"])
+    expect(
+      collectSubtree(sessions, "child-1")
+        .map((x) => x.id)
+        .sort(),
+    ).toEqual(["child-1", "grandchild-1"])
   })
 
   test("includes root itself in the result", () => {
@@ -58,10 +64,7 @@ describe("collectSubtree", () => {
   })
 
   test("does not loop forever on a parentID cycle", () => {
-    const sessions = [
-      s({ id: "root", parentID: "child" }),
-      s({ id: "child", parentID: "root" }),
-    ]
+    const sessions = [s({ id: "root", parentID: "child" }), s({ id: "child", parentID: "root" })]
     const ids = collectSubtree(sessions, "root").map((x) => x.id)
     expect(ids).toContain("root")
     expect(ids).toContain("child")

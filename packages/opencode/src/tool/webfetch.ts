@@ -248,9 +248,7 @@ export const WebFetchTool = Tool.define(
               return response
             }
             throw new Error(`Too many redirects (limit: ${MAX_REDIRECTS})`)
-          }).pipe(
-            Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error("Request timed out")) }),
-          )
+          }).pipe(Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error("Request timed out")) }))
 
           // Check content length up front when advertised.
           const contentLength = response.headers["content-length"]

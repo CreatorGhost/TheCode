@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { win32SystemTheme } from "../src/terminal-win32"
+import { parseWin32Theme, win32SystemTheme } from "../src/terminal-win32"
 
 test("win32SystemTheme returns a valid dark/light value on Windows, undefined elsewhere", () => {
   const result = win32SystemTheme()
@@ -12,22 +12,16 @@ test("win32SystemTheme returns a valid dark/light value on Windows, undefined el
   }
 })
 
-test("win32SystemTheme registry output parsing matches expected hex values", () => {
-  // Verify the regex logic used inside win32SystemTheme.
-  // reg query outputs: "    AppsUseLightTheme    REG_DWORD    0x0" (dark)
-  //                     "    AppsUseLightTheme    REG_DWORD    0x1" (light)
-  const parseLine = (line: string) => {
-    const match = line.match(/0x([0-9a-f]+)/i)
-    if (match) return parseInt(match[1], 16) === 0 ? "dark" : "light"
-    return undefined
-  }
-
-  expect(parseLine("    AppsUseLightTheme    REG_DWORD    0x0")).toBe("dark")
-  expect(parseLine("    AppsUseLightTheme    REG_DWORD    0x1")).toBe("light")
-  expect(parseLine("    AppsUseLightTheme    REG_DWORD    0x00000000")).toBe("dark")
-  expect(parseLine("    AppsUseLightTheme    REG_DWORD    0x00000001")).toBe("light")
-  expect(parseLine("no match here")).toBeUndefined()
-  expect(parseLine("")).toBeUndefined()
+test("parseWin32Theme parses AppsUseLightTheme DWORD from reg output", () => {
+  const key = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+  expect(parseWin32Theme(`${key}\r\n    AppsUseLightTheme    REG_DWORD    0x0\r\n`)).toBe("dark")
+  expect(parseWin32Theme(`${key}\r\n    AppsUseLightTheme    REG_DWORD    0x1\r\n`)).toBe("light")
+  expect(parseWin32Theme("    AppsUseLightTheme    REG_DWORD    0x00000000")).toBe("dark")
+  expect(parseWin32Theme("    AppsUseLightTheme    REG_DWORD    0x00000001")).toBe("light")
+  expect(parseWin32Theme("no match here")).toBeUndefined()
+  expect(parseWin32Theme("")).toBeUndefined()
+  // Anchored: a stray hex token that is NOT the AppsUseLightTheme value is ignored.
+  expect(parseWin32Theme("SomeOtherValue    REG_DWORD    0x1\r\n(no AppsUseLightTheme line)")).toBeUndefined()
 })
 
 test("win32SystemTheme is idempotent - second call returns same value as first", () => {

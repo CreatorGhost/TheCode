@@ -138,22 +138,36 @@ export function win32InstallCtrlCGuard() {
  * Returns `"dark"` when the value is `0`, `"light"` when `1`, or `undefined`
  * if the query fails (registry key absent on older Windows, non-Windows platform).
  */
+/**
+ * Parse the `AppsUseLightTheme` DWORD out of `reg query` output. Anchored to the
+ * value name so an unrelated hex token elsewhere in the output can't be picked up.
+ * `0` means dark mode, anything else light.
+ */
+export function parseWin32Theme(output: string): "dark" | "light" | undefined {
+  const match = output.match(/AppsUseLightTheme\s+REG_DWORD\s+0x([0-9a-f]+)/i)
+  if (!match) return undefined
+  return parseInt(match[1]!, 16) === 0 ? "dark" : "light"
+}
+
 export function win32SystemTheme(): "dark" | "light" | undefined {
   if (process.platform !== "win32") return undefined
   if (typeof Bun === "undefined") return undefined
   try {
-    const result = Bun.spawnSync([
-      "reg", "query",
-      "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-      "/v", "AppsUseLightTheme",
-    ])
-    const output = result.stdout?.toString() ?? ""
-    const match = output.match(/0x([0-9a-f]+)/i)
-    if (match) {
-      return parseInt(match[1], 16) === 0 ? "dark" : "light"
-    }
+    // timeout: reg.exe can hang (AV interception, contested handle) and this runs
+    // synchronously on the render thread. windowsHide: avoid a console flash.
+    const result = Bun.spawnSync(
+      [
+        "reg",
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        "/v",
+        "AppsUseLightTheme",
+      ],
+      { timeout: 1500, windowsHide: true },
+    )
+    return parseWin32Theme(result.stdout?.toString() ?? "")
   } catch {
-    // Registry key may not exist on Windows 8 or earlier.
+    // reg.exe missing (older Windows) or spawn failure — treat as unknown.
   }
   return undefined
 }

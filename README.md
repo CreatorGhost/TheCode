@@ -22,6 +22,17 @@ bun run --cwd packages/opencode build --single
 
 The build output is written to `packages/opencode/dist/dcode-<os>-<arch>/bin/dcode`.
 
+### npm
+
+```bash
+npm install -g dcode-ai
+```
+
+This installs the `dcode` command. npm automatically selects the prebuilt binary
+for your platform (published as `dcode-ai-<os>-<arch>` packages). Publishing is
+driven by the `publish-npm` GitHub Actions workflow and requires an `NPM_TOKEN`
+repository secret.
+
 ### GitHub Releases
 
 Once a release is available, install the latest build with:
@@ -35,9 +46,9 @@ The installer writes the executable to `~/.dcode/bin` by default. It supports
 order. DCode releases are published at
 [CreatorGhost/TheCode](https://github.com/CreatorGhost/TheCode/releases).
 
-DCode is not currently distributed through npm, Homebrew, Chocolatey, Scoop,
-Arch, Nix, or desktop app stores. Packages named `opencode` or `opencode-ai` in
-those channels install upstream OpenCode, not DCode.
+DCode is not distributed through Homebrew, Chocolatey, Scoop, Arch, Nix, or
+desktop app stores. Packages named `opencode` or `opencode-ai` in those channels
+install upstream OpenCode, not DCode.
 
 ## Usage
 

@@ -386,13 +386,7 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
       ProviderTransform.options({ model: createGpt5Model(id), sessionID, providerOptions: {} }),
     )
 
-    expect(options.map((item) => item.promptCacheKey)).toEqual([
-      sessionID,
-      sessionID,
-      sessionID,
-      sessionID,
-      sessionID,
-    ])
+    expect(options.map((item) => item.promptCacheKey)).toEqual([sessionID, sessionID, sessionID, sessionID, sessionID])
     expect(options.map((item) => item.promptCacheOptions)).toEqual([
       { mode: "implicit", ttl: "30m" },
       { mode: "implicit", ttl: "30m" },

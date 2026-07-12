@@ -62,32 +62,38 @@ describe("prompt-input history", () => {
   })
 
   test("prependHistoryEntry skips oversized inline data-url attachments while keeping text", () => {
-    const added = prependHistoryEntry([], [
-      { type: "text", content: "review this", start: 0, end: 11 },
-      {
-        type: "image",
-        id: "pdf_1",
-        filename: "paper.pdf",
-        mime: "application/pdf",
-        dataUrl: oversizedDataUrl(),
-      },
-    ])
+    const added = prependHistoryEntry(
+      [],
+      [
+        { type: "text", content: "review this", start: 0, end: 11 },
+        {
+          type: "image",
+          id: "pdf_1",
+          filename: "paper.pdf",
+          mime: "application/pdf",
+          dataUrl: oversizedDataUrl(),
+        },
+      ],
+    )
     const entry = normalizePromptHistoryEntry(firstHistoryEntry(added))
 
     expect(entry.prompt).toEqual([{ type: "text", content: "review this", start: 0, end: 11 }])
   })
 
   test("prependHistoryEntry keeps small inline data-url attachments", () => {
-    const added = prependHistoryEntry([], [
-      { type: "text", content: "see image", start: 0, end: 9 },
-      {
-        type: "image",
-        id: "img_1",
-        filename: "image.png",
-        mime: "image/png",
-        dataUrl: "data:image/png;base64,AAA",
-      },
-    ])
+    const added = prependHistoryEntry(
+      [],
+      [
+        { type: "text", content: "see image", start: 0, end: 9 },
+        {
+          type: "image",
+          id: "img_1",
+          filename: "image.png",
+          mime: "image/png",
+          dataUrl: "data:image/png;base64,AAA",
+        },
+      ],
+    )
     const entry = normalizePromptHistoryEntry(firstHistoryEntry(added))
 
     expect(entry.prompt).toMatchObject([

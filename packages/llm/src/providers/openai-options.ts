@@ -48,8 +48,7 @@ const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): Provide
   return { openai }
 }
 
-export const isGPT56Family = (modelID: string) =>
-  /(?:^|[/.])gpt-5\.6(?:$|[-_/.])/.test(modelID.toLowerCase())
+export const isGPT56Family = (modelID: string) => /(?:^|[/.])gpt-5\.6(?:$|[-_/.])/.test(modelID.toLowerCase())
 
 export const gpt5DefaultOptions = (
   modelID: string,

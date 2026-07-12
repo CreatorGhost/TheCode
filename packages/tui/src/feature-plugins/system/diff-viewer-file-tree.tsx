@@ -85,7 +85,11 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
                     backgroundColor={highlighted() ? props.theme.primary : undefined}
                     onMouseUp={() => props.onRowClick?.(row)}
                   >
-                    <text fg={highlighted() ? props.theme.selectedListItemText : fadedColor()} wrapMode="none" flexShrink={0}>
+                    <text
+                      fg={highlighted() ? props.theme.selectedListItemText : fadedColor()}
+                      wrapMode="none"
+                      flexShrink={0}
+                    >
                       {prefix()}
                     </text>
                     <box flexGrow={1} minWidth={0}>

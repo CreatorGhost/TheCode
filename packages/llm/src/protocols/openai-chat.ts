@@ -408,7 +408,10 @@ const mapUsage = (usage: OpenAIChatEvent["usage"]): Usage | undefined => {
   const cached = usage.prompt_tokens_details?.cached_tokens
   const cacheWrite = usage.prompt_tokens_details?.cache_write_tokens
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
-  const nonCached = ProviderShared.subtractTokens(ProviderShared.subtractTokens(usage.prompt_tokens, cached), cacheWrite)
+  const nonCached = ProviderShared.subtractTokens(
+    ProviderShared.subtractTokens(usage.prompt_tokens, cached),
+    cacheWrite,
+  )
   return new Usage({
     inputTokens: usage.prompt_tokens,
     outputTokens: usage.completion_tokens,
@@ -434,8 +437,7 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     let lifecycle = state.lifecycle
 
     const reasoningText = delta ? openAICompatibleReasoningContent(delta) : undefined
-    if (reasoningText)
-      lifecycle = Lifecycle.reasoningDelta(lifecycle, events, "reasoning-0", reasoningText)
+    if (reasoningText) lifecycle = Lifecycle.reasoningDelta(lifecycle, events, "reasoning-0", reasoningText)
 
     if (delta?.content) {
       lifecycle = Lifecycle.reasoningEnd(lifecycle, events, "reasoning-0")

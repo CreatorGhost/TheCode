@@ -64,7 +64,10 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
         </box>
       </Show>
       <text>
-        <span style={{ fg: theme().textMuted }}>{path().parent}{path().parent ? "/" : ""}</span>
+        <span style={{ fg: theme().textMuted }}>
+          {path().parent}
+          {path().parent ? "/" : ""}
+        </span>
         <span style={{ fg: theme().text }}>{path().name}</span>
       </text>
       <text fg={theme().textMuted}>

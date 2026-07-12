@@ -74,12 +74,10 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
     // Screenshots and other in-memory clipboard images have no disk path, so
     // persist them to a temp file that file-path-based tools (e.g. MCP image readers) can access.
     if (!sourcePath && input.persistTempImage) {
-      sourcePath = await input.persistTempImage(await file.arrayBuffer(), mime.split("/")[1] ?? "png").catch(
-        (err) => {
-          console.warn("Failed to persist temp image for attachment:", err)
-          return undefined
-        },
-      )
+      sourcePath = await input.persistTempImage(await file.arrayBuffer(), mime.split("/")[1] ?? "png").catch((err) => {
+        console.warn("Failed to persist temp image for attachment:", err)
+        return undefined
+      })
     }
 
     const attachment: ImageAttachmentPart = {

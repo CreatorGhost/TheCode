@@ -72,4 +72,36 @@ describe("Auth", () => {
       expect(after["anthropic"]).toBeUndefined()
     }),
   )
+
+  // #30396 — concurrent Auth.set must not clobber sibling providers
+  it.instance("set is safe under concurrent calls", () =>
+    Effect.gen(function* () {
+      const auth = yield* Auth.Service
+      yield* Effect.all(
+        [
+          auth.set("anthropic", { type: "api", key: "k1" }),
+          auth.set("openai", { type: "api", key: "k2" }),
+          auth.set("google", { type: "api", key: "k3" }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      const data = yield* auth.all()
+      expect(Object.keys(data).sort()).toEqual(["anthropic", "google", "openai"])
+    }),
+  )
+
+  it.instance("set and remove are safe under concurrent calls", () =>
+    Effect.gen(function* () {
+      const auth = yield* Auth.Service
+      yield* auth.set("anthropic", { type: "api", key: "k1" })
+
+      yield* Effect.all([auth.set("openai", { type: "api", key: "k2" }), auth.remove("anthropic")], {
+        concurrency: "unbounded",
+      })
+
+      const data = yield* auth.all()
+      expect(data["openai"]).toBeDefined()
+      expect(data["anthropic"]).toBeUndefined()
+    }),
+  )
 })

@@ -160,4 +160,21 @@ describe("tool.webfetch", () => {
         }),
     ),
   )
+
+  it.instance("rejects redirects to private targets when the SSRF guard is enabled", () =>
+    withFetch(
+      (req) => {
+        const path = new URL(req.url).pathname
+        if (path === "/start") return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/" } })
+        return new Response("landed", { status: 200 })
+      },
+      (url) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            exec({ url: new URL("/start", url).toString(), format: "text" }, { allowPrivate: false }),
+          )
+          expect(exit._tag).toBe("Failure")
+        }),
+    ),
+  )
 })

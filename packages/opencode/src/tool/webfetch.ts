@@ -122,12 +122,8 @@ export async function assertPublicUrl(rawUrl: string): Promise<void> {
     return
   }
   const records = await dns.lookup(host, { all: true })
-  for (const record of records) {
-    if (isPrivateIp(record.address)) {
-      throw new Error(
-        `Refusing to fetch host that resolves to a private address: ${host} -> ${record.address}. ${ALLOW_PRIVATE_HINT}`,
-      )
-    }
+  if (records.some((record) => isPrivateIp(record.address))) {
+    throw new Error(`Refusing to fetch host that resolves to a private address: ${host}. ${ALLOW_PRIVATE_HINT}`)
   }
 }
 

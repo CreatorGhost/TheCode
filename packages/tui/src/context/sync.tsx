@@ -193,6 +193,45 @@ export const {
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
+    // Fast-streaming models emit message.part.delta faster than the renderer
+    // keeps up; applying every chunk synchronously starves input handling and
+    // freezes scrolling (#36043). Deltas accumulate per part field and flush
+    // together on a short interval instead.
+    const pendingDeltas = new Map<string, { messageID: string; partID: string; field: string; delta: string }>()
+    let deltaTimer: ReturnType<typeof setTimeout> | undefined
+    // Apply buffered deltas to the store. With no argument, flush everything (timer
+    // tick, stream completion). With a part, flush only that part's buffered deltas —
+    // used before applying a full snapshot so accumulated text is committed rather
+    // than discarded.
+    const flushDeltas = (only?: { messageID: string; partID: string }) => {
+      if (only === undefined && deltaTimer) {
+        clearTimeout(deltaTimer)
+        deltaTimer = undefined
+      }
+      if (!pendingDeltas.size) return
+      const prefix = only ? `${only.messageID}|${only.partID}|` : undefined
+      batch(() => {
+        for (const [key, pending] of [...pendingDeltas.entries()]) {
+          if (prefix && !key.startsWith(prefix)) continue
+          pendingDeltas.delete(key)
+          const parts = store.part[pending.messageID]
+          if (!parts) continue
+          const result = search(parts, pending.partID, (p) => p.id)
+          if (!result.found) continue
+          setStore(
+            "part",
+            pending.messageID,
+            produce((draft) => {
+              const part = draft[result.index]
+              const field = pending.field as keyof typeof part
+              const existing = part[field] as string | undefined
+              ;(part[field] as string) = (existing ?? "") + pending.delta
+            }),
+          )
+        }
+      })
+    }
+
     event.subscribe((event, { directory, workspace }) => {
       switch (event.type) {
         case "server.instance.disposed":
@@ -334,11 +373,17 @@ export const {
         }
 
         case "session.status": {
+          // When a session goes idle the stream is done; flush any buffered deltas so
+          // a stream that ended on a delta (no trailing snapshot) isn't truncated.
+          if (event.properties.status.type === "idle") flushDeltas()
           setStore("session_status", event.properties.sessionID, event.properties.status)
           break
         }
 
         case "message.updated": {
+          // A completed assistant message ends its stream; flush buffered deltas so
+          // trailing streamed text is committed even without a final snapshot.
+          if (event.properties.info.role === "assistant" && event.properties.info.time?.completed) flushDeltas()
           if (event.properties.info.role === "user") {
             const optimisticID = optimisticBySession.get(event.properties.info.sessionID)
             if (optimisticID && optimisticID !== event.properties.info.id) {
@@ -400,6 +445,9 @@ export const {
           break
         }
         case "message.part.updated": {
+          // Commit this part's buffered deltas before the full snapshot reconciles,
+          // so accumulated streamed text is preserved rather than discarded.
+          flushDeltas({ messageID: event.properties.part.messageID, partID: event.properties.part.id })
           touchPart(event.properties.part.sessionID, event.properties.part.id)
           const parts = store.part[event.properties.part.messageID]
           if (!parts) {
@@ -427,16 +475,17 @@ export const {
           const result = search(parts, event.properties.partID, (p) => p.id)
           if (!result.found) break
           touchPart(event.properties.sessionID, event.properties.partID)
-          setStore(
-            "part",
-            event.properties.messageID,
-            produce((draft) => {
-              const part = draft[result.index]
-              const field = event.properties.field as keyof typeof part
-              const existing = part[field] as string | undefined
-              ;(part[field] as string) = (existing ?? "") + event.properties.delta
-            }),
-          )
+          const key = `${event.properties.messageID}|${event.properties.partID}|${event.properties.field}`
+          const pending = pendingDeltas.get(key)
+          if (pending) pending.delta += event.properties.delta
+          else
+            pendingDeltas.set(key, {
+              messageID: event.properties.messageID,
+              partID: event.properties.partID,
+              field: event.properties.field,
+              delta: event.properties.delta,
+            })
+          if (!deltaTimer) deltaTimer = setTimeout(flushDeltas, 40)
           break
         }
 

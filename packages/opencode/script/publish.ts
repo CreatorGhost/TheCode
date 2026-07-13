@@ -58,8 +58,16 @@ const publish = async (pkgDir: string, name: string) => {
     console.log(`skipping ${name}@${version} (already published)`)
     return
   }
-  console.log(`publishing ${name}@${version}`)
-  await $`npm publish ${flags}`.cwd(pkgDir)
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    console.log(`publishing ${name}@${version}${attempt > 1 ? ` (attempt ${attempt}/5)` : ""}`)
+    const result = await $`npm publish ${flags}`.cwd(pkgDir).quiet().nothrow()
+    if (result.exitCode === 0) return
+    const output = `${result.stdout.toString("utf8")}\n${result.stderr.toString("utf8")}`
+    if (!output.includes("E429") || attempt === 5) throw new Error(output)
+    const delay = attempt * 60_000
+    console.log(`npm rate limited ${name}; retrying in ${delay / 1000}s`)
+    await Bun.sleep(delay)
+  }
 }
 
 // Map each built target (dcode-<...>) to its published npm name (dcode-ai-<...>).

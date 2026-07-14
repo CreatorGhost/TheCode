@@ -5,6 +5,7 @@ import {
   Cause,
   Clock,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -194,6 +195,26 @@ export interface Interface extends State.Transformable<Draft> {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Integration") {}
+
+const refreshes = new Map<Credential.ID, Deferred.Deferred<Credential.Value | undefined, AuthorizationError>>()
+
+const refresh = (
+  credentialID: Credential.ID,
+  effect: Effect.Effect<Credential.Value | undefined, AuthorizationError>,
+) =>
+  Effect.suspend(() => {
+    const current = refreshes.get(credentialID)
+    if (current) return Deferred.await(current)
+    const deferred = Deferred.makeUnsafe<Credential.Value | undefined, AuthorizationError>()
+    refreshes.set(credentialID, deferred)
+    return effect.pipe(
+      Effect.onExit((exit) =>
+        Deferred.done(deferred, exit).pipe(Effect.andThen(Effect.sync(() => refreshes.delete(credentialID)))),
+      ),
+      Effect.forkDetach({ startImmediately: true }),
+      Effect.andThen(Deferred.await(deferred)),
+    )
+  })
 
 const attemptLifetime = Duration.toMillis(Duration.minutes(10))
 const terminalRetention = Duration.toMillis(Duration.minutes(1))
@@ -390,16 +411,38 @@ export const locationLayer = Layer.effect(
           const credential = yield* credentials.get(connection.id)
           if (!credential) return undefined
           if (credential.value.type === "key") return credential.value
-          const implementation = state
-            .get()
-            .integrations.get(credential.integrationID)
-            ?.implementations.get(credential.value.methodID)
-          if (!implementation?.refresh) return credential.value
-          const now = yield* Clock.currentTimeMillis
-          if (credential.value.expires > now + Duration.toMillis(Duration.minutes(5))) return credential.value
-          const value = yield* authorize(implementation.refresh(credential.value))
-          yield* credentials.update(credential.id, { value })
-          return value
+          const oauth = credential.value
+          return yield* refresh(
+            credential.id,
+            Effect.gen(function* () {
+              const latest = yield* credentials.get(credential.id)
+              if (!latest || latest.value.type === "key") return latest?.value
+              if (
+                latest.value.access !== oauth.access ||
+                latest.value.refresh !== oauth.refresh ||
+                latest.value.expires !== oauth.expires
+              )
+                return latest.value
+              const implementation = state
+                .get()
+                .integrations.get(latest.integrationID)
+                ?.implementations.get(latest.value.methodID)
+              if (!implementation?.refresh) return latest.value
+              const now = yield* Clock.currentTimeMillis
+              if (latest.value.expires > now + Duration.toMillis(Duration.minutes(5))) return latest.value
+              const value = yield* authorize(implementation.refresh(latest.value))
+              const current = yield* credentials.get(latest.id)
+              if (!current || current.value.type === "key") return current?.value
+              if (
+                current.value.access !== latest.value.access ||
+                current.value.refresh !== latest.value.refresh ||
+                current.value.expires !== latest.value.expires
+              )
+                return current.value
+              yield* credentials.update(latest.id, { value })
+              return value
+            }),
+          )
         }),
         key: Effect.fn("Integration.connection.key")(function* (input) {
           const method = state

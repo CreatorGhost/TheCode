@@ -353,6 +353,7 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage
   for (const msg of unique([...system, ...final])) {
     const useMessageLevelOptions =
       model.providerID === "anthropic" ||
+      model.providerID === "anthropic-subscription" ||
       model.providerID.includes("bedrock") ||
       model.api.npm === "@ai-sdk/amazon-bedrock"
     const shouldUseContentOptions = !useMessageLevelOptions && Array.isArray(msg.content) && msg.content.length > 0
@@ -437,6 +438,7 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
   msgs = normalizeMessages(msgs, model, options)
   if (
     (model.providerID === "anthropic" ||
+      model.providerID === "anthropic-subscription" ||
       model.providerID === "google-vertex-anthropic" ||
       (model.api.npm === "@openrouter/ai-sdk-provider" && model.api.id.includes("gemini")) ||
       model.api.id.includes("anthropic") ||

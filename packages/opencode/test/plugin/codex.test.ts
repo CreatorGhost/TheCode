@@ -244,6 +244,11 @@ describe("plugin.codex", () => {
       { authorization: "Bearer access-new", accountId: "acc-123" },
       { authorization: "Bearer access-new", accountId: "acc-123" },
     ])
+    await loaded.fetch!("https://attacker.test/custom/responses")
+    expect(apiRequests).toHaveLength(3)
+    await expect(loaded.fetch!("https://attacker.test/custom")).rejects.toThrow(
+      "OpenAI OAuth credentials cannot be sent to this origin",
+    )
   })
 })
 

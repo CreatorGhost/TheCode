@@ -437,6 +437,46 @@ describe("session.llm-native.request", () => {
         auth: { type: "oauth", refresh: "refresh", access: "access", expires: 1 },
       }),
     ).toMatchObject({ type: "supported", apiKey: OAUTH_DUMMY_KEY })
+    expect(
+      LLMNativeRuntime.status({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("anthropic-subscription"),
+          api: { ...baseModel.api, npm: "@ai-sdk/anthropic" },
+        },
+        provider: {
+          ...providerInfo,
+          id: ProviderV2.ID.make("anthropic-subscription"),
+          options: { apiKey: OAUTH_DUMMY_KEY, fetch: async () => new Response() },
+        },
+        auth: { type: "oauth", refresh: "refresh", access: "access", expires: 1 },
+      }),
+    ).toMatchObject({ type: "supported", apiKey: OAUTH_DUMMY_KEY })
+    expect(
+      LLMNativeRuntime.status({
+        model: { ...baseModel, providerID: ProviderV2.ID.make("anthropic-subscription") },
+        provider: {
+          ...providerInfo,
+          id: ProviderV2.ID.make("anthropic-subscription"),
+          options: { apiKey: OAUTH_DUMMY_KEY, fetch: async () => new Response() },
+        },
+        auth: { type: "oauth", refresh: "refresh", access: "access", expires: 1 },
+      }),
+    ).toEqual({ type: "unsupported", reason: "Claude subscription requires the Anthropic provider package" })
+    expect(
+      LLMNativeRuntime.status({
+        model: baseModel,
+        provider: { ...providerInfo, id: ProviderV2.ID.make("anthropic") },
+        auth: undefined,
+      }),
+    ).toEqual({ type: "unsupported", reason: "provider does not match model provider" })
+    expect(
+      LLMNativeRuntime.status({
+        model: { ...baseModel, api: { ...baseModel.api, npm: "@ai-sdk/anthropic" } },
+        provider: { ...providerInfo, options: { apiKey: OAUTH_DUMMY_KEY, fetch: async () => new Response() } },
+        auth: { type: "oauth", refresh: "refresh", access: "access", expires: 1 },
+      }),
+    ).toEqual({ type: "unsupported", reason: "OpenAI OAuth requires an OpenAI provider package" })
 
     expect(
       LLMNativeRuntime.status({
@@ -748,6 +788,70 @@ describe("session.llm-native.request", () => {
           model: "gpt-5-mini",
           instructions: "You are concise.",
           input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+        },
+      })
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "text-delta", text: "Hello" }),
+          expect.objectContaining({ type: "finish" }),
+        ]),
+      )
+    }),
+  )
+
+  it.effect("uses provider fetch override for native Anthropic subscription requests", () =>
+    Effect.gen(function* () {
+      const captures: Array<{ url: string; body: unknown }> = []
+      const customFetch = Object.assign(
+        async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+          const request = input instanceof Request ? input : new Request(input, init)
+          captures.push({ url: request.url, body: await request.clone().json() })
+          return responsesStream([
+            { type: "message_start", message: { usage: { input_tokens: 1 } } },
+            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } },
+            { type: "content_block_stop", index: 0 },
+            { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+            { type: "message_stop" },
+          ])
+        },
+        { preconnect: () => undefined },
+      ) satisfies typeof fetch
+
+      const llmClient = yield* LLMClient.Service
+      const native = LLMNativeRuntime.stream({
+        model: {
+          ...baseModel,
+          id: ModelV2.ID.make("claude-sonnet-test"),
+          providerID: ProviderV2.ID.make("anthropic-subscription"),
+          api: {
+            id: "claude-sonnet-test",
+            url: "https://api.anthropic.com/v1",
+            npm: "@ai-sdk/anthropic",
+          },
+        },
+        provider: {
+          ...providerInfo,
+          id: ProviderV2.ID.make("anthropic-subscription"),
+          options: { apiKey: OAUTH_DUMMY_KEY, fetch: customFetch },
+        },
+        auth: { type: "oauth", refresh: "refresh", access: "access", expires: Date.now() + 60_000 },
+        llmClient,
+        messages: [{ role: "user", content: "hello" }],
+        tools: {},
+        headers: {},
+        abort: new AbortController().signal,
+      })
+      expect(native.type).toBe("supported")
+      if (native.type === "unsupported") throw new Error(native.reason)
+      const events = Array.from(yield* native.stream.pipe(Stream.runCollect))
+
+      expect(captures).toHaveLength(1)
+      expect(captures[0]).toMatchObject({
+        url: "https://api.anthropic.com/v1/messages",
+        body: {
+          model: "claude-sonnet-test",
+          messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
         },
       })
       expect(events).toEqual(

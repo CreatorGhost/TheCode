@@ -5,6 +5,58 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { RootHttpApi } from "../api"
 import { LogInput } from "../groups/control"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Credential } from "@opencode-ai/core/credential"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import {
+  AnthropicSubscriptionIntegrationID,
+  AnthropicSubscriptionMethodID,
+  AnthropicSubscriptionProviderID,
+} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
+import { withAnthropicSubscriptionCredentialLock } from "@/provider/anthropic-subscription-credential"
+
+const credentialLayer = AppNodeBuilder.build(Credential.node)
+
+function updateDurable(value?: Auth.Info) {
+  return Effect.gen(function* () {
+    const credentials = yield* Credential.Service
+    const previous = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
+    if (value?.type === "oauth") {
+      const next = Credential.OAuth.make({
+        type: "oauth",
+        methodID: AnthropicSubscriptionMethodID,
+        access: value.access,
+        refresh: value.refresh,
+        expires: value.expires,
+      })
+      if (previous) yield* credentials.update(previous.id, { value: next })
+      else
+        yield* credentials.create({
+          integrationID: AnthropicSubscriptionIntegrationID,
+          label: "Claude Pro/Max",
+          value: next,
+        })
+      return previous
+    }
+    for (const credential of yield* credentials.list(AnthropicSubscriptionIntegrationID)) {
+      yield* credentials.remove(credential.id)
+    }
+    return previous
+  }).pipe(Effect.provide(credentialLayer))
+}
+
+function restoreDurable(previous: Credential.Info | undefined) {
+  if (!previous) return updateDurable()
+  return Effect.gen(function* () {
+    const credentials = yield* Credential.Service
+    if (yield* credentials.get(previous.id)) yield* credentials.update(previous.id, { value: previous.value })
+    else
+      yield* credentials.create({
+        integrationID: previous.integrationID,
+        label: previous.label,
+        value: previous.value,
+      })
+  }).pipe(Effect.provide(credentialLayer))
+}
 
 export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (handlers) =>
   Effect.gen(function* () {
@@ -14,14 +66,38 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
       params: { providerID: ProviderV2.ID }
       payload: Auth.Info
     }) {
-      yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
+      if (ctx.params.providerID !== AnthropicSubscriptionProviderID) {
+        yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
+        return true
+      }
+      yield* withAnthropicSubscriptionCredentialLock(
+        Effect.gen(function* () {
+          const previous = yield* updateDurable(ctx.payload)
+          yield* auth.remove(ctx.params.providerID).pipe(
+            Effect.tapError(() => restoreDurable(previous)),
+            Effect.orDie,
+          )
+        }),
+      )
       return true
     })
 
     const authRemove = Effect.fn("ControlHttpApi.authRemove")(function* (ctx: {
       params: { providerID: ProviderV2.ID }
     }) {
-      yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
+      if (ctx.params.providerID !== AnthropicSubscriptionProviderID) {
+        yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
+        return true
+      }
+      yield* withAnthropicSubscriptionCredentialLock(
+        Effect.gen(function* () {
+          const previous = yield* updateDurable()
+          yield* auth.remove(ctx.params.providerID).pipe(
+            Effect.tapError(() => restoreDurable(previous)),
+            Effect.orDie,
+          )
+        }),
+      )
       return true
     })
 

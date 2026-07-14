@@ -31,6 +31,13 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { Credential } from "@opencode-ai/core/credential"
+import {
+  AnthropicSubscriptionIntegrationID,
+  AnthropicSubscriptionMethodID,
+  AnthropicSubscriptionProviderID,
+} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
+import { withAnthropicSubscriptionCredentialLock } from "./anthropic-subscription-credential"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 
@@ -1314,6 +1321,20 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   }
 }
 
+export function withSyntheticProviders(providers: Record<string, ModelsDev.Provider>) {
+  const anthropic = providers.anthropic
+  if (!anthropic) return providers
+  return {
+    ...providers,
+    "anthropic-subscription": {
+      ...anthropic,
+      id: "anthropic-subscription",
+      name: "Claude Pro/Max",
+      env: [],
+    },
+  }
+}
+
 function modelSuggestions(provider: Info | undefined, modelID: ModelV2.ID, enableExperimentalModels: boolean) {
   const available = provider
     ? Object.keys(provider.models).filter((id) => {
@@ -1349,6 +1370,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const config = yield* Config.Service
     const auth = yield* Auth.Service
+    const credentials = yield* Credential.Service
     const env = yield* Env.Service
     const plugin = yield* Plugin.Service
     const modelsDevSvc = yield* ModelsDev.Service
@@ -1358,11 +1380,48 @@ const layer = Layer.effect(
       Effect.gen(function* () {
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
-        const modelsDev = yield* modelsDevSvc.get()
+        const modelsDev = withSyntheticProviders(yield* modelsDevSvc.get())
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
+        const storedAuth = Effect.fn("Provider.storedAuth")(function* (providerID: ProviderV2.ID) {
+          if (providerID !== AnthropicSubscriptionProviderID) return yield* auth.get(providerID).pipe(Effect.orDie)
+          return yield* withAnthropicSubscriptionCredentialLock(
+            Effect.gen(function* () {
+              const credential = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
+              if (credential?.value.type === "oauth") {
+                if (yield* auth.get(providerID).pipe(Effect.orDie)) yield* auth.remove(providerID).pipe(Effect.orDie)
+                return {
+                  type: "oauth" as const,
+                  access: credential.value.access,
+                  refresh: credential.value.refresh,
+                  expires: credential.value.expires,
+                }
+              }
+              const legacy = yield* auth.get(providerID).pipe(Effect.orDie)
+              if (legacy?.type !== "oauth") return legacy
+              yield* credentials.create({
+                integrationID: AnthropicSubscriptionIntegrationID,
+                label: "Claude Pro/Max",
+                value: Credential.OAuth.make({
+                  type: "oauth",
+                  methodID: AnthropicSubscriptionMethodID,
+                  access: legacy.access,
+                  refresh: legacy.refresh,
+                  expires: legacy.expires,
+                }),
+              })
+              yield* auth.remove(providerID).pipe(Effect.orDie)
+              return {
+                type: "oauth" as const,
+                access: legacy.access,
+                refresh: legacy.refresh,
+                expires: legacy.expires,
+              }
+            }),
+          )
+        })
         const languages = new Map<string, LanguageModelV3>()
         const modelLoaders: {
           [providerID: string]: CustomModelLoader
@@ -1418,7 +1477,7 @@ const layer = Layer.effect(
 
           const provider = database[providerID]
           if (!provider) continue
-          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+          const pluginAuth = yield* storedAuth(providerID)
 
           provider.models = yield* Effect.promise(async () => {
             const next = await models(toPublicInfo(provider), { auth: pluginAuth })
@@ -1561,15 +1620,14 @@ const layer = Layer.effect(
           const providerID = ProviderV2.ID.make(plugin.auth.provider)
           if (disabled.has(providerID)) continue
 
-          const stored = yield* auth.get(providerID).pipe(Effect.orDie)
+          const stored = yield* storedAuth(providerID)
           if (!stored) continue
           if (!plugin.auth.loader) continue
+          const data = database[plugin.auth.provider]
+          if (!data) continue
 
           const options = yield* Effect.promise(() =>
-            plugin.auth!.loader!(
-              () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
-              toPublicInfo(database[plugin.auth!.provider]),
-            ),
+            plugin.auth!.loader!(() => bridge.promise(storedAuth(providerID)) as any, toPublicInfo(data)),
           )
           const opts = options ?? {}
           const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
@@ -2096,7 +2154,16 @@ function matchesSelector(alias: ReturnType<typeof selectorTokens>, requested: Re
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Config.node, Auth.node, Env.node, Plugin.node, ModelsDev.node, RuntimeFlags.node],
+  deps: [
+    FSUtil.node,
+    Config.node,
+    Auth.node,
+    Credential.node,
+    Env.node,
+    Plugin.node,
+    ModelsDev.node,
+    RuntimeFlags.node,
+  ],
 })
 
 export * as Provider from "./provider"

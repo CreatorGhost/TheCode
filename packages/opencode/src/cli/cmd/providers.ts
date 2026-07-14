@@ -5,11 +5,20 @@ import { CliError, effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 import * as Prompt from "../effect/prompt"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { Credential } from "@opencode-ai/core/credential"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import {
+  AnthropicSubscriptionIntegrationID,
+  AnthropicSubscriptionMethodID,
+  AnthropicSubscriptionProviderID,
+} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
+import { withAnthropicSubscriptionCredentialLock } from "@/provider/anthropic-subscription-credential"
 
 import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
 import os from "os"
 import { Config } from "@/config/config"
+import { Provider } from "@/provider/provider"
 import { Global } from "@opencode-ai/core/global"
 import { Plugin } from "../../plugin"
 import type { Hooks } from "@opencode-ai/plugin"
@@ -19,6 +28,7 @@ import { text } from "node:stream/consumers"
 import { Effect, Option } from "effect"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
+const credentialLayer = AppNodeBuilder.build(Credential.node)
 
 const promptValue = <Value>(value: Option.Option<Value>) => {
   if (Option.isNone(value)) return Effect.die(new UI.CancelledError())
@@ -28,6 +38,51 @@ const promptValue = <Value>(value: Option.Option<Value>) => {
 const put = Effect.fn("Cli.providers.put")(function* (key: string, info: Auth.Info) {
   const auth = yield* Auth.Service
   yield* Effect.orDie(auth.set(key, info))
+})
+
+const putOAuth = Effect.fn("Cli.providers.putOAuth")(function* (
+  provider: string,
+  value: { refresh: string; access: string; expires: number },
+  extra: Omit<Auth.Oauth, "type" | "refresh" | "access" | "expires">,
+) {
+  if (provider !== AnthropicSubscriptionProviderID) {
+    yield* put(provider, { type: "oauth", ...value, ...extra })
+    return
+  }
+  yield* withAnthropicSubscriptionCredentialLock(
+    Effect.gen(function* () {
+      const durable = yield* Effect.gen(function* () {
+        const credentials = yield* Credential.Service
+        const previous = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
+        const next = Credential.OAuth.make({
+          type: "oauth",
+          methodID: AnthropicSubscriptionMethodID,
+          ...value,
+        })
+        const created = previous
+          ? yield* credentials.update(previous.id, { value: next }).pipe(Effect.as(previous))
+          : yield* credentials.create({
+              integrationID: AnthropicSubscriptionIntegrationID,
+              label: "Claude Pro/Max",
+              value: next,
+            })
+        return { created, previous }
+      }).pipe(Effect.provide(credentialLayer))
+      const auth = yield* Auth.Service
+      yield* Effect.orDie(auth.remove(provider)).pipe(
+        Effect.onError(() =>
+          Effect.gen(function* () {
+            const credentials = yield* Credential.Service
+            if (durable.previous) {
+              yield* credentials.update(durable.previous.id, { value: durable.previous.value })
+              return
+            }
+            yield* credentials.remove(durable.created.id)
+          }).pipe(Effect.provide(credentialLayer)),
+        ),
+      )
+    }),
+  )
 })
 
 const cliTry = <Value>(message: string, fn: () => PromiseLike<Value>) =>
@@ -113,13 +168,7 @@ const handlePluginAuth = Effect.fn("Cli.providers.pluginAuth")(function* (
         const saveProvider = result.provider ?? provider
         if ("refresh" in result) {
           const { type: _, provider: __, refresh, access, expires, ...extraFields } = result
-          yield* put(saveProvider, {
-            type: "oauth",
-            refresh,
-            access,
-            expires,
-            ...extraFields,
-          })
+          yield* putOAuth(saveProvider, { refresh, access, expires }, extraFields)
         }
         if ("key" in result) {
           yield* put(saveProvider, {
@@ -146,13 +195,7 @@ const handlePluginAuth = Effect.fn("Cli.providers.pluginAuth")(function* (
         const saveProvider = result.provider ?? provider
         if ("refresh" in result) {
           const { type: _, provider: __, refresh, access, expires, ...extraFields } = result
-          yield* put(saveProvider, {
-            type: "oauth",
-            refresh,
-            access,
-            expires,
-            ...extraFields,
-          })
+          yield* putOAuth(saveProvider, { refresh, access, expires }, extraFields)
         }
         if ("key" in result) {
           yield* put(saveProvider, {
@@ -260,8 +303,22 @@ export const ProvidersListCommand = effectCmd({
     const homedir = os.homedir()
     const displayPath = authPath.startsWith(homedir) ? authPath.replace(homedir, "~") : authPath
     yield* Prompt.intro(`Credentials ${UI.Style.TEXT_DIM}${displayPath}`)
-    const results = Object.entries(yield* Effect.orDie(authSvc.all()))
-    const database = yield* modelsDev.get()
+    const results: Array<[string, Auth.Info]> = Object.entries(yield* Effect.orDie(authSvc.all()))
+    const subscription = yield* Effect.gen(function* () {
+      return (yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)).at(-1)
+    }).pipe(Effect.provide(credentialLayer))
+    if (subscription?.value.type === "oauth" && !results.some(([id]) => id === AnthropicSubscriptionProviderID)) {
+      results.push([
+        AnthropicSubscriptionProviderID,
+        {
+          type: "oauth",
+          access: subscription.value.access,
+          refresh: subscription.value.refresh,
+          expires: subscription.value.expires,
+        },
+      ])
+    }
+    const database = Provider.withSyntheticProviders(yield* modelsDev.get())
 
     for (const [providerID, result] of results) {
       const name = database[providerID]?.name || providerID
@@ -361,7 +418,7 @@ export const ProvidersLoginCommand = effectCmd({
     const disabled = new Set(config.disabled_providers ?? [])
     const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
 
-    const allProviders = yield* modelsDev.get()
+    const allProviders = Provider.withSyntheticProviders(yield* modelsDev.get())
     const providers: Record<string, (typeof allProviders)[string]> = {}
     for (const [key, value] of Object.entries(allProviders)) {
       if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) providers[key] = value
@@ -372,10 +429,11 @@ export const ProvidersLoginCommand = effectCmd({
       opencode: 0,
       openai: 1,
       "github-copilot": 2,
-      google: 3,
-      anthropic: 4,
-      openrouter: 5,
-      vercel: 6,
+      "anthropic-subscription": 3,
+      google: 4,
+      anthropic: 5,
+      openrouter: 6,
+      vercel: 7,
     }
     const pluginProviders = resolvePluginProviders({
       hooks,
@@ -398,6 +456,7 @@ export const ProvidersLoginCommand = effectCmd({
           hint: {
             opencode: "recommended",
             openai: "ChatGPT Plus/Pro or API key",
+            "anthropic-subscription": "Claude Pro/Max subscription",
           }[x.id],
         })),
       ),
@@ -504,12 +563,26 @@ export const ProvidersLogoutCommand = effectCmd({
 
     UI.empty()
     const credentials: Array<[string, Auth.Info]> = Object.entries(yield* Effect.orDie(authSvc.all()))
+    const subscription = yield* Effect.gen(function* () {
+      return (yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)).at(-1)
+    }).pipe(Effect.provide(credentialLayer))
+    if (subscription?.value.type === "oauth" && !credentials.some(([id]) => id === AnthropicSubscriptionProviderID)) {
+      credentials.push([
+        AnthropicSubscriptionProviderID,
+        {
+          type: "oauth",
+          access: subscription.value.access,
+          refresh: subscription.value.refresh,
+          expires: subscription.value.expires,
+        },
+      ])
+    }
     yield* Prompt.intro("Remove credential")
     if (credentials.length === 0) {
       yield* Prompt.log.error("No credentials found")
       return
     }
-    const database = yield* modelsDev.get()
+    const database = Provider.withSyntheticProviders(yield* modelsDev.get())
     const options = credentials.map(([key, value]) => ({
       label: (database[key]?.name || key) + UI.Style.TEXT_DIM + " (" + value.type + ")",
       value: key,
@@ -528,6 +601,36 @@ export const ProvidersLogoutCommand = effectCmd({
           }),
         )
     if (!provider) return yield* fail(`Unknown configured provider "${args.provider}"`)
+    if (provider === AnthropicSubscriptionProviderID) {
+      yield* withAnthropicSubscriptionCredentialLock(
+        Effect.gen(function* () {
+          const previous = yield* Effect.gen(function* () {
+            const credentials = yield* Credential.Service
+            const stored = yield* credentials.list(AnthropicSubscriptionIntegrationID)
+            for (const credential of stored) {
+              yield* credentials.remove(credential.id)
+            }
+            return stored.at(-1)
+          }).pipe(Effect.provide(credentialLayer))
+          yield* Effect.orDie(authSvc.remove(provider)).pipe(
+            Effect.onError(() =>
+              previous
+                ? Effect.gen(function* () {
+                    const credentials = yield* Credential.Service
+                    yield* credentials.create({
+                      integrationID: previous.integrationID,
+                      label: previous.label,
+                      value: previous.value,
+                    })
+                  }).pipe(Effect.provide(credentialLayer))
+                : Effect.void,
+            ),
+          )
+        }),
+      )
+      yield* Prompt.outro("Logout successful")
+      return
+    }
     yield* Effect.orDie(authSvc.remove(provider))
     yield* Prompt.outro("Logout successful")
   }),

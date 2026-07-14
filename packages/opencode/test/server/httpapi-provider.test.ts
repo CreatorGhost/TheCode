@@ -1,5 +1,11 @@
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { Credential } from "@opencode-ai/core/credential"
+import {
+  AnthropicSubscriptionIntegrationID,
+  AnthropicSubscriptionMethodID,
+} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect, Layer } from "effect"
 import path from "path"
@@ -180,6 +186,42 @@ function writeProviderAuthValidationPlugin(dir: string) {
   })
 }
 
+function writeAnthropicSubscriptionPlugin(dir: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    yield* Effect.promise(() => markPluginDependenciesReady(path.join(dir, ".opencode")))
+    yield* fs.writeWithDirs(
+      path.join(dir, ".opencode", "plugin", "anthropic-subscription-test.ts"),
+      [
+        "export default {",
+        '  id: "test.anthropic-subscription",',
+        "  server: async () => ({",
+        "    auth: {",
+        '      provider: "anthropic-subscription",',
+        "      methods: [{",
+        '        type: "oauth",',
+        '        label: "Claude Pro/Max subscription",',
+        "        authorize: async () => ({",
+        '          url: "https://claude.test/oauth",',
+        '          method: "code",',
+        '          instructions: "Paste code",',
+        "          callback: async () => ({",
+        '            type: "success",',
+        '            access: "access-token",',
+        '            refresh: "refresh-token",',
+        "            expires: 4102444800000,",
+        "          }),",
+        "        }),",
+        "      }],",
+        "    },",
+        "  }),",
+        "}",
+        "",
+      ].join("\n"),
+    )
+  })
+}
+
 function writeFunctionOptionsPlugin(dir: string) {
   return Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -348,6 +390,66 @@ describe("provider HttpApi", () => {
       })
     }),
     projectOptions,
+    30000,
+  )
+
+  it.instance(
+    "stores and removes Claude subscription OAuth in the durable credential registry",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+      expect(yield* requestAuthorize({ providerID: "anthropic-subscription", method: 0, headers })).toMatchObject({
+        status: 200,
+      })
+      expect(
+        yield* requestCallback({ providerID: "anthropic-subscription", method: 0, code: "code", headers }),
+      ).toEqual({ status: 200, body: "true" })
+
+      const stored = yield* Effect.gen(function* () {
+        return yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)
+      }).pipe(Effect.provide(AppNodeBuilder.build(Credential.node)))
+      expect(stored).toHaveLength(1)
+      expect(stored[0]).toMatchObject({
+        integrationID: AnthropicSubscriptionIntegrationID,
+        label: "Claude Pro/Max",
+        value: {
+          type: "oauth",
+          methodID: AnthropicSubscriptionMethodID,
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: 4102444800000,
+        },
+      })
+      const removed = yield* request("/auth/anthropic-subscription", { method: "DELETE", headers })
+      expect(removed.status).toBe(200)
+      expect(
+        yield* Effect.gen(function* () {
+          return yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)
+        }).pipe(Effect.provide(AppNodeBuilder.build(Credential.node))),
+      ).toEqual([])
+      const set = yield* request("/auth/anthropic-subscription", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          type: "oauth",
+          access: "access-from-control",
+          refresh: "refresh-from-control",
+          expires: 4102444800000,
+        }),
+      })
+      expect(set.status).toBe(200)
+      expect(
+        (yield* Effect.gen(function* () {
+          return (yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)).at(-1)
+        }).pipe(Effect.provide(AppNodeBuilder.build(Credential.node))))?.value,
+      ).toMatchObject({
+        type: "oauth",
+        access: "access-from-control",
+        refresh: "refresh-from-control",
+      })
+      expect((yield* request("/auth/anthropic-subscription", { method: "DELETE", headers })).status).toBe(200)
+    }),
+    { ...projectOptions, init: writeAnthropicSubscriptionPlugin },
     30000,
   )
 

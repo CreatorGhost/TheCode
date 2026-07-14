@@ -19,11 +19,20 @@ describe("providerOptions", () => {
       providerOptions([
         { id: "openai", name: "OpenAI" },
         { id: "custom-z", name: "Zebra Provider" },
+        { id: "anthropic-subscription", name: "Claude Pro/Max" },
         { id: "anthropic", name: "Anthropic" },
         { id: "mistral", name: "Mistral" },
         { id: "aws", name: "AWS Bedrock" },
       ]).map((option) => option.value),
-    ).toEqual(["openai", "anthropic", "aws", "mistral", "custom-z", "__opencode_custom_provider__"])
+    ).toEqual([
+      "openai",
+      "anthropic-subscription",
+      "anthropic",
+      "aws",
+      "mistral",
+      "custom-z",
+      "__opencode_custom_provider__",
+    ])
   })
 
   test("does not collide with a configured provider named other", () => {

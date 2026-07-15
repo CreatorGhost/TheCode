@@ -53,26 +53,50 @@ const alreadyPublished = async (name: string) => {
   const res = await fetch(`https://registry.npmjs.org/${name}/${version}`)
   return res.ok
 }
-const publish = async (pkgDir: string, name: string) => {
+const MAX_ATTEMPTS = 8
+
+// Honor an explicit Retry-After when npm surfaces one, else back off exponentially.
+const parseRetryAfter = (output: string) => {
+  const match = output.match(/retry-after:\s*(\d+)/i)
+  if (!match) return undefined
+  const seconds = Number(match[1])
+  return Number.isFinite(seconds) ? seconds * 1000 : undefined
+}
+
+// Publishes one package. Returns true on success (or already-published), false on
+// failure. It never throws: a single platform's npm publish rate limit (E429 on
+// the large Windows binaries) must not abort the run before the tiny user-facing
+// wrapper is published. Failed packages are collected and reported, and a re-run
+// fills them idempotently via the already-published skip above.
+const publish = async (pkgDir: string, name: string): Promise<boolean> => {
   if (await alreadyPublished(name)) {
     console.log(`skipping ${name}@${version} (already published)`)
-    return
+    return true
   }
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    console.log(`publishing ${name}@${version}${attempt > 1 ? ` (attempt ${attempt}/5)` : ""}`)
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    console.log(`publishing ${name}@${version}${attempt > 1 ? ` (attempt ${attempt}/${MAX_ATTEMPTS})` : ""}`)
     const result = await $`npm publish ${flags}`.cwd(pkgDir).quiet().nothrow()
-    if (result.exitCode === 0) return
+    if (result.exitCode === 0) return true
     const output = `${result.stdout.toString("utf8")}\n${result.stderr.toString("utf8")}`
-    if (!output.includes("E429") || attempt === 5) throw new Error(output)
-    const delay = attempt * 60_000
-    console.log(`npm rate limited ${name}; retrying in ${delay / 1000}s`)
+    if (!output.includes("E429")) {
+      console.error(`failed to publish ${name}:\n${output}`)
+      return false
+    }
+    if (attempt === MAX_ATTEMPTS) {
+      console.error(`npm rate limited ${name} after ${attempt} attempts; leaving it for a re-run`)
+      return false
+    }
+    const delay = parseRetryAfter(output) ?? Math.min(attempt * 90_000, 300_000)
+    console.log(`npm rate limited ${name}; retrying in ${Math.round(delay / 1000)}s`)
     await Bun.sleep(delay)
   }
+  return false
 }
 
 // Map each built target (dcode-<...>) to its published npm name (dcode-ai-<...>).
 const npmNameFor = (built: string) => built.replace(/^dcode-/, `${NPM_NAME}-`)
 
+const failures: string[] = []
 const optionalDependencies: Record<string, string> = {}
 for (const built of names) {
   const npmName = npmNameFor(built)
@@ -84,8 +108,12 @@ for (const built of names) {
   pkgJson.license = "MIT"
   pkgJson.repository = { type: "git", url: "git+https://github.com/CreatorGhost/TheCode.git" }
   fs.writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2))
-  await publish(pkgDir, npmName)
+  // Always declare the platform dep at this version: npm only resolves the
+  // current platform's optional dep at install time, so listing one that is still
+  // rate limited is harmless, and a later re-run that publishes it makes it
+  // available without needing to touch the already-published wrapper.
   optionalDependencies[npmName] = version
+  if (!(await publish(pkgDir, npmName))) failures.push(npmName)
 }
 
 // Assemble the wrapper package from a clean generated manifest (the source
@@ -119,6 +147,20 @@ fs.writeFileSync(
   ),
 )
 
-await publish(wrapperDir, NPM_NAME)
+// Always publish the wrapper, even if some platform binaries were rate limited.
+// The wrapper is a few hundred KB and never hits E429; gating it on every platform
+// (one 184MB Windows binary that npm throttles) is exactly what left `dcode-ai`
+// unpublished and un-installable before.
+if (!(await publish(wrapperDir, NPM_NAME))) failures.push(NPM_NAME)
 
-console.log(dryRun ? "dry run complete" : `published ${NPM_NAME}@${version} (${names.length} platform packages)`)
+if (dryRun) {
+  console.log("dry run complete")
+} else if (failures.length > 0) {
+  console.error(
+    `published what it could, but these packages were left for a re-run: ${failures.join(", ")}. ` +
+      `Re-running this workflow with the same version publishes only the missing ones.`,
+  )
+  process.exit(1)
+} else {
+  console.log(`published ${NPM_NAME}@${version} (${names.length} platform packages)`)
+}

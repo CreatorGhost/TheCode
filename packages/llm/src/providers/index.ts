@@ -1,4 +1,5 @@
 export * as Anthropic from "./anthropic"
+export * as AnthropicSubscription from "./anthropic-subscription"
 export * as AmazonBedrock from "./amazon-bedrock"
 export * as Azure from "./azure"
 export * as Cloudflare from "./cloudflare"

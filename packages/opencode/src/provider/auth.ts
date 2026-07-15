@@ -6,6 +6,9 @@ import { InstanceState } from "@/effect/instance-state"
 import { optional } from "@opencode-ai/core/schema"
 import { Plugin } from "../plugin"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Credential } from "@opencode-ai/core/credential"
+import { AnthropicSubscriptionProviderID } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
+import { saveAnthropicSubscriptionCredential } from "./anthropic-subscription-credential"
 import { Array as Arr, Effect, Layer, Record, Result, Context, Schema } from "effect"
 
 const When = Schema.Struct({
@@ -106,10 +109,11 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Pr
 
 export const use = serviceUse(Service)
 
-const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.effect(
+const layer: Layer.Layer<Service, never, Auth.Service | Credential.Service | Plugin.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const auth = yield* Auth.Service
+    const credentials = yield* Credential.Service
     const plugin = yield* Plugin.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("ProviderAuth.state")(function* () {
@@ -210,13 +214,18 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
 
       if ("refresh" in result) {
         const { type: _, provider: __, refresh, access, expires, ...extra } = result
-        yield* auth.set(input.providerID, {
+        const value = {
           type: "oauth",
           access,
           refresh,
           expires,
           ...extra,
-        })
+        } as const
+        if (input.providerID === AnthropicSubscriptionProviderID) {
+          yield* saveAnthropicSubscriptionCredential({ access, refresh, expires }, { auth, credentials })
+          return
+        }
+        yield* auth.set(input.providerID, value)
       }
     })
 
@@ -224,6 +233,6 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [Auth.node, Plugin.node] })
+export const node = LayerNode.make({ service: Service, layer: layer, deps: [Auth.node, Credential.node, Plugin.node] })
 
 export * as ProviderAuth from "./auth"

@@ -3,7 +3,7 @@ import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -23,8 +23,47 @@ import { InstanceStore } from "@/project/instance-store"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { Credential } from "@opencode-ai/core/credential"
+import {
+  AnthropicSubscriptionIntegrationID,
+  AnthropicSubscriptionMethodID,
+} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
 
 const originalEnv = new Map<string, string | undefined>()
+
+test("synthetic Claude subscription catalog is derived from Anthropic", () => {
+  const anthropic = {
+    id: "anthropic",
+    name: "Anthropic",
+    env: ["ANTHROPIC_API_KEY"],
+    npm: "@ai-sdk/anthropic",
+    api: "https://api.anthropic.com/v1",
+    models: {
+      "claude-sonnet-test": {
+        id: "claude-sonnet-test",
+        name: "Claude Sonnet Test",
+        release_date: "2026-01-01",
+        attachment: true,
+        reasoning: true,
+        temperature: true,
+        tool_call: true,
+        limit: { context: 200_000, output: 8_192 },
+      },
+    },
+  } satisfies ModelsDev.Provider
+
+  const providers = Provider.withSyntheticProviders({ anthropic })
+
+  expect(providers.anthropic).toBe(anthropic)
+  expect(providers["anthropic-subscription"]).toMatchObject({
+    id: "anthropic-subscription",
+    name: "Claude Pro/Max",
+    env: [],
+    npm: "@ai-sdk/anthropic",
+    api: "https://api.anthropic.com/v1",
+    models: { "claude-sonnet-test": { id: "claude-sonnet-test" } },
+  })
+})
 
 const rememberEnv = (k: string) => {
   if (!originalEnv.has(k)) originalEnv.set(k, process.env[k])
@@ -119,6 +158,76 @@ it.instance("provider loaded from env variable", () =>
     expect(providers[ProviderV2.ID.anthropic].source).toBe("env")
     expect(providers[ProviderV2.ID.anthropic].options.headers["anthropic-beta"]).toBeDefined()
   }),
+)
+
+it.instance(
+  "Anthropic subscription OAuth loads as a separate native provider",
+  () =>
+    Effect.gen(function* () {
+      yield* setProcessEnv(
+        "OPENCODE_AUTH_CONTENT",
+        JSON.stringify({
+          "anthropic-subscription": {
+            type: "oauth",
+            refresh: "refresh-token",
+            access: "access-token",
+            expires: Date.now() + 3_600_000,
+          },
+        }),
+      )
+
+      const providers = yield* list
+      const subscription = providers[ProviderV2.ID.make("anthropic-subscription")]
+      expect(subscription).toBeDefined()
+      expect(subscription.name).toBe("Claude Pro/Max")
+      expect(subscription.options.apiKey).toBe("opencode-oauth-dummy-key")
+      expect(subscription.options.fetch).toBeFunction()
+      expect(providers[ProviderV2.ID.anthropic]).toBeUndefined()
+
+      const models = Object.values(subscription.models)
+      expect(models.length).toBeGreaterThan(0)
+      expect(models.every((model) => model.providerID === "anthropic-subscription")).toBe(true)
+      expect(models.every((model) => model.api.npm === "@ai-sdk/anthropic")).toBe(true)
+      expect(models.every((model) => model.cost.input === 0 && model.cost.output === 0)).toBe(true)
+      expect(
+        yield* Effect.gen(function* () {
+          return yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)
+        }).pipe(Effect.provide(AppNodeBuilder.build(Credential.node))),
+      ).toEqual([
+        expect.objectContaining({
+          integrationID: AnthropicSubscriptionIntegrationID,
+          value: expect.objectContaining({
+            type: "oauth",
+            methodID: AnthropicSubscriptionMethodID,
+            refresh: "refresh-token",
+            access: "access-token",
+          }),
+        }),
+      ])
+
+      const language = yield* Provider.use.getLanguage(models[0])
+      expect(language).toBeDefined()
+    }),
+  {
+    config: {
+      provider: {
+        "anthropic-subscription": {
+          name: "Claude Pro/Max",
+          npm: "@ai-sdk/anthropic",
+          api: "https://api.anthropic.com/v1",
+          models: {
+            "claude-sonnet-test": {
+              name: "Claude Sonnet Test",
+              reasoning: true,
+              tool_call: true,
+              limit: { context: 200_000, output: 8_192 },
+              cost: { input: 0, output: 0 },
+            },
+          },
+        },
+      },
+    },
+  },
 )
 
 it.instance(

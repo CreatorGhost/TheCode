@@ -1,7 +1,7 @@
 export * as Credential from "./credential"
 
 import { asc, eq } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Equal, Layer, Schema } from "effect"
 import { Credential } from "@opencode-ai/schema/credential"
 import { Integration } from "@opencode-ai/schema/integration"
 import { Database } from "./database/database"
@@ -40,8 +40,25 @@ export interface Interface {
     readonly value: Value
     readonly label?: string
   }) => Effect.Effect<Info>
+  /** Creates a credential only when the integration has no stored credential. */
+  readonly createIfAbsent: (input: {
+    readonly integrationID: Integration.ID
+    readonly value: Value
+    readonly label?: string
+  }) => Effect.Effect<{ readonly created: boolean; readonly credential: Info }>
   /** Updates the label or secret value of a stored credential. */
   readonly update: (id: ID, updates: Partial<Pick<Info, "label" | "value">>) => Effect.Effect<void>
+  /** Replaces an OAuth value only when it still matches the expected value. */
+  readonly compareAndSetOAuth: (
+    id: ID,
+    expected: OAuth,
+    value: OAuth,
+  ) => Effect.Effect<{ readonly updated: boolean; readonly value: Value | undefined }>
+  /** Removes a credential only when its value still matches the expected value. */
+  readonly compareAndRemove: (
+    id: ID,
+    expected: Value,
+  ) => Effect.Effect<{ readonly removed: boolean; readonly value: Value | undefined }>
   /** Removes a stored credential. */
   readonly remove: (id: ID) => Effect.Effect<void>
 }
@@ -53,6 +70,8 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const decode = Schema.decodeUnknownSync(Value)
+    const decodePersisted = Schema.decodeUnknownSync(Schema.fromJsonString(Value))
+    const persisted = (value: Value) => decodePersisted(JSON.stringify(value))
     const stored = (row: typeof CredentialTable.$inferSelect) => {
       if (!row.integration_id) return
       return new Info({
@@ -119,6 +138,39 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return credential
       }),
+      createIfAbsent: Effect.fn("Credential.createIfAbsent")(function* (input) {
+        return yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const row = yield* tx
+                  .select()
+                  .from(CredentialTable)
+                  .where(eq(CredentialTable.integration_id, input.integrationID))
+                  .get()
+                const current = row ? stored(row) : undefined
+                if (current) return { created: false, credential: current }
+                const credential = new Info({
+                  id: ID.create(),
+                  integrationID: input.integrationID,
+                  label: input.label ?? "default",
+                  value: input.value,
+                })
+                yield* tx
+                  .insert(CredentialTable)
+                  .values({
+                    id: credential.id,
+                    integration_id: credential.integrationID,
+                    label: credential.label,
+                    value: credential.value,
+                  })
+                  .run()
+                return { created: true, credential }
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
+      }),
       update: Effect.fn("Credential.update")(function* (id, updates) {
         if (!updates.label && !updates.value) return
         yield* db
@@ -126,6 +178,37 @@ const layer = Layer.effect(
           .set({ label: updates.label, value: updates.value })
           .where(eq(CredentialTable.id, id))
           .run()
+          .pipe(Effect.orDie)
+      }),
+      compareAndSetOAuth: Effect.fn("Credential.compareAndSetOAuth")(function* (id, expected, value) {
+        return yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const row = yield* tx.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get()
+                const current = row ? stored(row)?.value : undefined
+                if (current?.type !== "oauth" || !Equal.equals(current, persisted(expected)))
+                  return { updated: false, value: current }
+                yield* tx.update(CredentialTable).set({ value }).where(eq(CredentialTable.id, id)).run()
+                return { updated: true, value }
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
+      }),
+      compareAndRemove: Effect.fn("Credential.compareAndRemove")(function* (id, expected) {
+        return yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const row = yield* tx.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get()
+                const current = row ? stored(row)?.value : undefined
+                if (!Equal.equals(current, persisted(expected))) return { removed: false, value: current }
+                yield* tx.delete(CredentialTable).where(eq(CredentialTable.id, id)).run()
+                return { removed: true, value: undefined }
+              }),
+            { behavior: "immediate" },
+          )
           .pipe(Effect.orDie)
       }),
       remove: Effect.fn("Credential.remove")(function* (id) {

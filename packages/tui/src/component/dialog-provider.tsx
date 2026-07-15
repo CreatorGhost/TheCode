@@ -21,8 +21,9 @@ const PROVIDER_PRIORITY: Record<string, number> = {
   "opencode-go": 1,
   openai: 2,
   "github-copilot": 3,
-  anthropic: 4,
-  google: 5,
+  "anthropic-subscription": 4,
+  anthropic: 5,
+  google: 6,
 }
 
 const CUSTOM_PROVIDER_OPTION_VALUE = "__opencode_custom_provider__"
@@ -61,6 +62,7 @@ export function providerOptions(list: { id: string; name: string }[]): ProviderO
         description: {
           opencode: "(Recommended)",
           anthropic: "(API key)",
+          "anthropic-subscription": "(Claude Pro/Max)",
           openai: "(ChatGPT Plus/Pro or API key)",
           "opencode-go": "Low cost subscription for everyone",
         }[provider.id],
@@ -145,7 +147,18 @@ export function createDialogProviderOptions() {
           async onSelect() {
             if (consoleManaged) return
 
-            const methods = sync.data.provider_auth[providerID] ?? [
+            const discovered = sync.data.provider_auth[providerID]
+            if (!discovered && providerID === "anthropic-subscription") {
+              toast.show({
+                variant: sync.data.provider_auth_status === "pending" ? "info" : "error",
+                message:
+                  sync.data.provider_auth_status === "pending"
+                    ? "Provider authentication methods are still loading"
+                    : "Claude subscription authentication is unavailable",
+              })
+              return
+            }
+            const methods = discovered ?? [
               {
                 type: "api",
                 label: "API key",

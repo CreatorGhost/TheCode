@@ -5,6 +5,7 @@ import {
   Cause,
   Clock,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -194,6 +195,26 @@ export interface Interface extends State.Transformable<Draft> {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Integration") {}
+
+const refreshes = new Map<Credential.ID, Deferred.Deferred<Credential.Value | undefined, AuthorizationError>>()
+
+const refresh = (
+  credentialID: Credential.ID,
+  effect: Effect.Effect<Credential.Value | undefined, AuthorizationError>,
+) =>
+  Effect.suspend(() => {
+    const current = refreshes.get(credentialID)
+    if (current) return Deferred.await(current)
+    const deferred = Deferred.makeUnsafe<Credential.Value | undefined, AuthorizationError>()
+    refreshes.set(credentialID, deferred)
+    return effect.pipe(
+      Effect.onExit((exit) =>
+        Deferred.done(deferred, exit).pipe(Effect.andThen(Effect.sync(() => refreshes.delete(credentialID)))),
+      ),
+      Effect.forkDetach({ startImmediately: true }),
+      Effect.andThen(Deferred.await(deferred)),
+    )
+  })
 
 const attemptLifetime = Duration.toMillis(Duration.minutes(10))
 const terminalRetention = Duration.toMillis(Duration.minutes(1))
@@ -390,16 +411,30 @@ export const locationLayer = Layer.effect(
           const credential = yield* credentials.get(connection.id)
           if (!credential) return undefined
           if (credential.value.type === "key") return credential.value
-          const implementation = state
-            .get()
-            .integrations.get(credential.integrationID)
-            ?.implementations.get(credential.value.methodID)
-          if (!implementation?.refresh) return credential.value
-          const now = yield* Clock.currentTimeMillis
-          if (credential.value.expires > now + Duration.toMillis(Duration.minutes(5))) return credential.value
-          const value = yield* authorize(implementation.refresh(credential.value))
-          yield* credentials.update(credential.id, { value })
-          return value
+          const oauth = credential.value
+          return yield* refresh(
+            credential.id,
+            Effect.gen(function* () {
+              const latest = yield* credentials.get(credential.id)
+              if (!latest || latest.value.type === "key") return latest?.value
+              if (
+                latest.value.methodID !== oauth.methodID ||
+                latest.value.access !== oauth.access ||
+                latest.value.refresh !== oauth.refresh ||
+                latest.value.expires !== oauth.expires
+              )
+                return latest.value
+              const implementation = state
+                .get()
+                .integrations.get(latest.integrationID)
+                ?.implementations.get(latest.value.methodID)
+              if (!implementation?.refresh) return latest.value
+              const now = yield* Clock.currentTimeMillis
+              if (latest.value.expires > now + Duration.toMillis(Duration.minutes(5))) return latest.value
+              const value = yield* authorize(implementation.refresh(latest.value))
+              return yield* persistOAuthRefresh(latest.id, latest.value, value, credentials)
+            }),
+          )
         }),
         key: Effect.fn("Integration.connection.key")(function* (input) {
           const method = state
@@ -516,5 +551,34 @@ export const locationLayer = Layer.effect(
     })
   }),
 )
+
+function persistOAuthRefresh(
+  id: Credential.ID,
+  expected: Credential.OAuth,
+  value: Credential.OAuth,
+  credentials: Credential.Interface,
+): Effect.Effect<Credential.Value | undefined> {
+  return credentials.compareAndSetOAuth(id, expected, value).pipe(
+    Effect.flatMap((result) => {
+      if (result.updated) return Effect.succeed(value)
+      const current = result.value
+      if (
+        current?.type !== "oauth" ||
+        current.methodID !== expected.methodID ||
+        current.access !== expected.access ||
+        current.refresh !== expected.refresh ||
+        current.expires !== expected.expires
+      ) {
+        return Effect.succeed(current)
+      }
+      return persistOAuthRefresh(
+        id,
+        current,
+        Credential.OAuth.make({ ...value, metadata: current.metadata }),
+        credentials,
+      )
+    }),
+  )
+}
 
 export const node = makeLocationNode({ service: Service, layer: locationLayer, deps: [Credential.node, EventV2.node] })

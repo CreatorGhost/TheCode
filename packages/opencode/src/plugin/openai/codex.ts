@@ -403,10 +403,13 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
               requestInput instanceof URL
                 ? requestInput
                 : new URL(typeof requestInput === "string" ? requestInput : requestInput.url)
-            const url =
-              parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
-                ? new URL(codexApiEndpoint)
-                : parsed
+            const providerRequest =
+              parsed.pathname.endsWith("/responses") || parsed.pathname.endsWith("/chat/completions")
+            const endpoint = new URL(codexApiEndpoint)
+            if (!providerRequest && parsed.origin !== endpoint.origin) {
+              throw new Error("OpenAI OAuth credentials cannot be sent to this origin")
+            }
+            const url = providerRequest ? endpoint : parsed
 
             const requestInit = {
               ...init,

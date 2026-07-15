@@ -5,6 +5,15 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { RootHttpApi } from "../api"
 import { LogInput } from "../groups/control"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Credential } from "@opencode-ai/core/credential"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { AnthropicSubscriptionProviderID } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
+import {
+  removeAnthropicSubscriptionCredential,
+  saveAnthropicSubscriptionCredential,
+} from "@/provider/anthropic-subscription-credential"
+
+const credentialLayer = AppNodeBuilder.build(Credential.node)
 
 export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (handlers) =>
   Effect.gen(function* () {
@@ -14,14 +23,35 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
       params: { providerID: ProviderV2.ID }
       payload: Auth.Info
     }) {
-      yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
+      if (ctx.params.providerID !== AnthropicSubscriptionProviderID) {
+        yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
+        return true
+      }
+      yield* Effect.gen(function* () {
+        const credentials = yield* Credential.Service
+        if (ctx.payload.type !== "oauth") {
+          yield* removeAnthropicSubscriptionCredential({ auth, credentials })
+          return
+        }
+        yield* saveAnthropicSubscriptionCredential(
+          { access: ctx.payload.access, refresh: ctx.payload.refresh, expires: ctx.payload.expires },
+          { auth, credentials },
+        )
+      }).pipe(Effect.provide(credentialLayer), Effect.orDie)
       return true
     })
 
     const authRemove = Effect.fn("ControlHttpApi.authRemove")(function* (ctx: {
       params: { providerID: ProviderV2.ID }
     }) {
-      yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
+      if (ctx.params.providerID !== AnthropicSubscriptionProviderID) {
+        yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
+        return true
+      }
+      yield* Effect.gen(function* () {
+        const credentials = yield* Credential.Service
+        yield* removeAnthropicSubscriptionCredential({ auth, credentials })
+      }).pipe(Effect.provide(credentialLayer), Effect.orDie)
       return true
     })
 

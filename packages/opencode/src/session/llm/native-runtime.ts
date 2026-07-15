@@ -52,12 +52,31 @@ function statusWithFetch(
   fetch: typeof globalThis.fetch | undefined,
 ): RuntimeStatus {
   const providerID = input.model.providerID
-  if (providerID !== "openai" && providerID !== "anthropic" && !providerID.startsWith("opencode"))
+  if (input.provider.id !== providerID) {
+    return { type: "unsupported", reason: "provider does not match model provider" }
+  }
+  if (
+    providerID !== "openai" &&
+    providerID !== "anthropic" &&
+    providerID !== "anthropic-subscription" &&
+    !providerID.startsWith("opencode")
+  )
     return { type: "unsupported", reason: "provider is not openai, opencode, or anthropic" }
   const npm = input.model.api.npm
   if (npm !== "@ai-sdk/openai" && npm !== "@ai-sdk/openai-compatible" && npm !== "@ai-sdk/anthropic")
     return { type: "unsupported", reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic" }
-  if (input.auth?.type === "oauth" && !(input.provider.id === "openai" && fetch)) {
+  if (providerID === "anthropic-subscription" && npm !== "@ai-sdk/anthropic") {
+    return { type: "unsupported", reason: "Claude subscription requires the Anthropic provider package" }
+  }
+  if (
+    providerID === "openai" &&
+    input.auth?.type === "oauth" &&
+    npm !== "@ai-sdk/openai" &&
+    npm !== "@ai-sdk/openai-compatible"
+  ) {
+    return { type: "unsupported", reason: "OpenAI OAuth requires an OpenAI provider package" }
+  }
+  if (input.auth?.type === "oauth" && !fetch) {
     return { type: "unsupported", reason: "OAuth auth requires a provider fetch override" }
   }
 
@@ -145,8 +164,17 @@ export function stream(input: StreamInput): StreamResult {
   }
 }
 
-function providerFetch(input: Pick<StreamInput, "provider" | "auth">): typeof globalThis.fetch | undefined {
-  if (input.provider.id !== "openai" || input.auth?.type !== "oauth") return undefined
+function providerFetch(input: Pick<StreamInput, "model" | "provider" | "auth">): typeof globalThis.fetch | undefined {
+  if (
+    input.model.providerID !== input.provider.id ||
+    (input.provider.id === "anthropic-subscription" && input.model.api.npm !== "@ai-sdk/anthropic") ||
+    (input.provider.id === "openai" &&
+      input.model.api.npm !== "@ai-sdk/openai" &&
+      input.model.api.npm !== "@ai-sdk/openai-compatible") ||
+    (input.provider.id !== "openai" && input.provider.id !== "anthropic-subscription") ||
+    input.auth?.type !== "oauth"
+  )
+    return undefined
   const value: unknown = input.provider.options.fetch
   if (typeof value !== "function") return undefined
   return value as typeof globalThis.fetch

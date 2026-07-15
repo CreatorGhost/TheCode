@@ -3,6 +3,8 @@ export * as SessionRunnerModel from "./model"
 import { makeLocationNode } from "../../effect/app-node"
 import { type Model } from "@opencode-ai/llm"
 import * as AnthropicMessages from "@opencode-ai/llm/protocols/anthropic-messages"
+import { AnthropicSubscription } from "@opencode-ai/llm/providers"
+import { AnthropicSubscriptionMethodID } from "../../plugin/provider/anthropic-subscription"
 import * as OpenAICompatibleChat from "@opencode-ai/llm/protocols/openai-compatible-chat"
 import * as OpenAIResponses from "@opencode-ai/llm/protocols/openai-responses"
 import { Auth, type AnyRoute } from "@opencode-ai/llm/route"
@@ -64,11 +66,24 @@ export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiE
   }
 }
 
+export class CredentialRequiredError extends Schema.TaggedErrorClass<CredentialRequiredError>()(
+  "SessionRunnerModel.CredentialRequiredError",
+  {
+    providerID: ProviderV2.ID,
+    modelID: ModelV2.ID,
+  },
+) {
+  override get message() {
+    return `OAuth credential required for ${this.providerID}/${this.modelID}`
+  }
+}
+
 export type Error =
   | ModelNotSelectedError
   | ModelUnavailableError
   | VariantUnavailableError
   | UnsupportedApiError
+  | CredentialRequiredError
   | Integration.AuthorizationError
 
 export interface Interface {
@@ -131,7 +146,8 @@ const apiName = (model: ModelV2.Info) =>
 export const fromCatalogModel = (
   model: ModelV2.Info,
   credential?: Credential.Value,
-): Effect.Effect<Model, UnsupportedApiError> => {
+  sessionID: SessionSchema.ID = SessionSchema.ID.create(),
+): Effect.Effect<Model, UnsupportedApiError | CredentialRequiredError> => {
   const resolved =
     credential?.type !== "key" || credential.metadata === undefined
       ? model
@@ -139,6 +155,37 @@ export const fromCatalogModel = (
           Object.assign(draft.request.body, credential.metadata)
         })
   const key = apiKey(resolved, credential)
+  if (resolved.providerID === ProviderV2.ID.make("anthropic-subscription")) {
+    if (resolved.api.type !== "aisdk" || resolved.api.package !== "@ai-sdk/anthropic") {
+      return Effect.fail(
+        new UnsupportedApiError({
+          providerID: resolved.providerID,
+          modelID: resolved.id,
+          api: apiName(resolved),
+        }),
+      )
+    }
+    if (credential?.type !== "oauth" || credential.methodID !== AnthropicSubscriptionMethodID)
+      return Effect.fail(
+        new CredentialRequiredError({
+          providerID: resolved.providerID,
+          modelID: resolved.id,
+        }),
+      )
+    const body = Object.hasOwn(resolved.request.body, "apiKey")
+      ? Object.fromEntries(Object.entries(resolved.request.body).filter(([name]) => name !== "apiKey"))
+      : resolved.request.body
+    return Effect.succeed(
+      AnthropicSubscription.configure({
+        accessToken: credential.access,
+        sessionID,
+        baseURL: resolved.api.url,
+        headers: resolved.request.headers,
+        http: { body },
+        limits: { context: resolved.limit.context, output: resolved.limit.output },
+      }).model(resolved.api.id),
+    )
+  }
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {
     return Effect.succeed(
       withDefaults(resolved, OpenAIResponses.route)
@@ -170,7 +217,9 @@ export const fromCatalogModel = (
 }
 
 export const resolve = (session: SessionSchema.Info, model: ModelV2.Info, credential?: Credential.Value) =>
-  withVariant(model, session.model?.variant).pipe(Effect.flatMap((model) => fromCatalogModel(model, credential)))
+  withVariant(model, session.model?.variant).pipe(
+    Effect.flatMap((model) => fromCatalogModel(model, credential, session.id)),
+  )
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&

@@ -11,6 +11,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { AnthropicSubscriptionMethodID } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
 import { it } from "./lib/effect"
 
 type Api =
@@ -243,6 +244,87 @@ describe("SessionRunnerModel", () => {
       expect(resolved.route).toMatchObject({
         id: "anthropic-messages",
         endpoint: { baseURL: "https://anthropic.example/v1" },
+      })
+    }),
+  )
+
+  it.effect("maps Claude subscription OAuth models into the dedicated native route", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        ModelV2.Info.make({
+          ...model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://api.anthropic.com/v1" }),
+          providerID: ProviderV2.ID.make("anthropic-subscription"),
+        }),
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: AnthropicSubscriptionMethodID,
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 3_600_000,
+        }),
+        SessionV2.ID.make("ses_subscription"),
+      )
+      const headers = yield* resolved.route.auth.apply({
+        request: LLM.request({ model: resolved, prompt: "Hello" }),
+        method: "POST",
+        url: "https://api.anthropic.com/v1/messages?beta=true",
+        body: "{}",
+        headers: Headers.fromInput({ "x-api-key": "configured-secret", "anthropic-beta": "existing-beta" }),
+      })
+
+      expect(resolved).toMatchObject({
+        provider: "anthropic-subscription",
+        route: {
+          id: "anthropic-subscription",
+          endpoint: { baseURL: "https://api.anthropic.com/v1", query: { beta: "true" } },
+          transport: { id: "http-json/sse/anthropic-subscription" },
+        },
+      })
+      expect(headers.authorization).toBe("Bearer oauth-access")
+      expect(headers["x-api-key"]).toBeUndefined()
+      expect(headers["x-claude-code-session-id"]).toBe("ses_subscription")
+      expect(headers["anthropic-beta"]).toContain("oauth-2025-04-20")
+    }),
+  )
+
+  it.effect("rejects Claude subscription models without OAuth credentials", () =>
+    Effect.gen(function* () {
+      const failure = yield* SessionRunnerModel.fromCatalogModel(
+        ModelV2.Info.make({
+          ...model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }),
+          providerID: ProviderV2.ID.make("anthropic-subscription"),
+        }),
+        Credential.Key.make({ type: "key", key: "not-oauth" }),
+      ).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "SessionRunnerModel.CredentialRequiredError",
+        providerID: "anthropic-subscription",
+        modelID: "test-model",
+      })
+    }),
+  )
+
+  it.effect("rejects Claude subscription credentials from another OAuth method", () =>
+    Effect.gen(function* () {
+      const failure = yield* SessionRunnerModel.fromCatalogModel(
+        ModelV2.Info.make({
+          ...model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }),
+          providerID: ProviderV2.ID.make("anthropic-subscription"),
+        }),
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("other-method"),
+          access: "wrong-access",
+          refresh: "wrong-refresh",
+          expires: Date.now() + 3_600_000,
+        }),
+      ).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "SessionRunnerModel.CredentialRequiredError",
+        providerID: "anthropic-subscription",
+        modelID: "test-model",
       })
     }),
   )

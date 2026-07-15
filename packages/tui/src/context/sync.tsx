@@ -71,6 +71,7 @@ export const {
         experimentalBackgroundSubagents: boolean
       }
       provider_auth: Record<string, ProviderAuthMethod[]>
+      provider_auth_status: "pending" | "complete" | "failed"
       agent: Agent[]
       command: Command[]
       permission: {
@@ -116,6 +117,7 @@ export const {
         experimentalBackgroundSubagents: false,
       },
       provider_auth: {},
+      provider_auth_status: "pending",
       config: {},
       status: "loading",
       agent: [],
@@ -525,6 +527,7 @@ export const {
 
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
+      setStore("provider_auth_status", "pending")
       const workspace = project.workspace.current()
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
@@ -605,7 +608,13 @@ export const {
             sdk.client.session.status({ workspace }).then((x) => {
               setStore("session_status", reconcile(x.data ?? {}))
             }),
-            sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
+            sdk.client.provider
+              .auth({ workspace }, { throwOnError: true })
+              .then((x) => {
+                setStore("provider_auth", reconcile(x.data ?? {}))
+                setStore("provider_auth_status", "complete")
+              })
+              .catch(() => setStore("provider_auth_status", "failed")),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
           ]).then(() => {
@@ -613,6 +622,7 @@ export const {
           })
         })
         .catch(async (e) => {
+          if (store.provider_auth_status === "pending") setStore("provider_auth_status", "failed")
           console.error("tui bootstrap failed", {
             error: e instanceof Error ? e.message : String(e),
             name: e instanceof Error ? e.name : undefined,

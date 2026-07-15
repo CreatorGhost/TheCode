@@ -34,10 +34,9 @@ import { ProviderError } from "./error"
 import { Credential } from "@opencode-ai/core/credential"
 import {
   AnthropicSubscriptionIntegrationID,
-  AnthropicSubscriptionMethodID,
   AnthropicSubscriptionProviderID,
 } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
-import { withAnthropicSubscriptionCredentialLock } from "./anthropic-subscription-credential"
+import { migrateAnthropicSubscriptionCredential } from "./anthropic-subscription-credential"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 
@@ -1387,40 +1386,18 @@ const layer = Layer.effect(
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const storedAuth = Effect.fn("Provider.storedAuth")(function* (providerID: ProviderV2.ID) {
           if (providerID !== AnthropicSubscriptionProviderID) return yield* auth.get(providerID).pipe(Effect.orDie)
-          return yield* withAnthropicSubscriptionCredentialLock(
-            Effect.gen(function* () {
-              const credential = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
-              if (credential?.value.type === "oauth") {
-                if (yield* auth.get(providerID).pipe(Effect.orDie)) yield* auth.remove(providerID).pipe(Effect.orDie)
-                return {
-                  type: "oauth" as const,
-                  access: credential.value.access,
-                  refresh: credential.value.refresh,
-                  expires: credential.value.expires,
-                }
-              }
-              const legacy = yield* auth.get(providerID).pipe(Effect.orDie)
-              if (legacy?.type !== "oauth") return legacy
-              yield* credentials.create({
-                integrationID: AnthropicSubscriptionIntegrationID,
-                label: "Claude Pro/Max",
-                value: Credential.OAuth.make({
-                  type: "oauth",
-                  methodID: AnthropicSubscriptionMethodID,
-                  access: legacy.access,
-                  refresh: legacy.refresh,
-                  expires: legacy.expires,
-                }),
-              })
-              yield* auth.remove(providerID).pipe(Effect.orDie)
-              return {
-                type: "oauth" as const,
-                access: legacy.access,
-                refresh: legacy.refresh,
-                expires: legacy.expires,
-              }
-            }),
-          )
+          const credential = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
+          const value =
+            credential?.value.type === "oauth"
+              ? credential.value
+              : yield* migrateAnthropicSubscriptionCredential({ auth, credentials }).pipe(Effect.orDie)
+          if (value?.type !== "oauth") return value
+          return {
+            type: "oauth" as const,
+            access: value.access,
+            refresh: value.refresh,
+            expires: value.expires,
+          }
         })
         const languages = new Map<string, LanguageModelV3>()
         const modelLoaders: {

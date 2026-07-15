@@ -10,6 +10,9 @@ import { sseEvents } from "../lib/sse"
 describe("Anthropic subscription provider", () => {
   it.effect("rewrites requests and restores streamed tool names", () =>
     Effect.gen(function* () {
+      expect(AnthropicSubscription.restoreToolNames('{"name":"mcp_ServerTool"}', new Map())).toBe(
+        '{"name":"mcp_ServerTool"}',
+      )
       const model = AnthropicSubscription.configure({
         accessToken: "oauth-access",
         sessionID: "session-123",

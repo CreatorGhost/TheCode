@@ -20,6 +20,7 @@ type Options = {
   readonly tokenEndpoint?: string
   readonly request?: Fetch
   readonly now?: () => number
+  readonly refreshTimeoutMs?: number
 }
 
 export type AnthropicSubscriptionTokenResponse = {
@@ -40,16 +41,33 @@ export function refreshAnthropicSubscriptionToken(input: {
   readonly refresh: string
   readonly request?: Fetch
   readonly tokenEndpoint?: string
+  readonly timeoutMs?: number
 }) {
   const endpoint = input.tokenEndpoint ?? tokenEndpoint
-  const key = `${endpoint}\u0000${input.refresh}`
+  const timeoutMs = input.timeoutMs ?? 30_000
+  const key = `${endpoint}\u0000${input.refresh}\u0000${timeoutMs}`
   const current = refreshRequests.get(key)
   if (current) return current
-  const pending = tokenRequestPromise(input.request ?? fetch, endpoint, {
-    grant_type: "refresh_token",
-    refresh_token: input.refresh,
-    client_id: clientID,
-  }).finally(() => {
+  const controller = new AbortController()
+  const timeout = Promise.withResolvers<never>()
+  const timer = setTimeout(() => {
+    controller.abort()
+    timeout.reject(new Error(`Anthropic OAuth request timed out after ${timeoutMs}ms`))
+  }, timeoutMs)
+  const pending = Promise.race([
+    tokenRequestPromise(
+      input.request ?? fetch,
+      endpoint,
+      {
+        grant_type: "refresh_token",
+        refresh_token: input.refresh,
+        client_id: clientID,
+      },
+      controller.signal,
+    ),
+    timeout.promise,
+  ]).finally(() => {
+    clearTimeout(timer)
     if (refreshRequests.get(key) === pending) refreshRequests.delete(key)
   })
   refreshRequests.set(key, pending)
@@ -110,7 +128,13 @@ export const makeAnthropicSubscriptionPlugin = (options: Options = {}) => {
       ),
     refresh: (value) =>
       Effect.tryPromise({
-        try: () => refreshAnthropicSubscriptionToken({ refresh: value.refresh, request, tokenEndpoint: tokens }),
+        try: () =>
+          refreshAnthropicSubscriptionToken({
+            refresh: value.refresh,
+            request,
+            tokenEndpoint: tokens,
+            timeoutMs: options.refreshTimeoutMs,
+          }),
         catch: (cause) => cause,
       }).pipe(Effect.map((result) => credential(result, result.refresh_token ?? value.refresh, now))),
   } satisfies IntegrationOAuthMethodRegistration

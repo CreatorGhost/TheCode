@@ -42,6 +42,8 @@ export interface Interface {
   }) => Effect.Effect<Info>
   /** Updates the label or secret value of a stored credential. */
   readonly update: (id: ID, updates: Partial<Pick<Info, "label" | "value">>) => Effect.Effect<void>
+  /** Replaces an OAuth value only when it still matches the expected value. */
+  readonly compareAndSetOAuth: (id: ID, expected: OAuth, value: OAuth) => Effect.Effect<Value | undefined>
   /** Removes a stored credential. */
   readonly remove: (id: ID) => Effect.Effect<void>
 }
@@ -126,6 +128,27 @@ const layer = Layer.effect(
           .set({ label: updates.label, value: updates.value })
           .where(eq(CredentialTable.id, id))
           .run()
+          .pipe(Effect.orDie)
+      }),
+      compareAndSetOAuth: Effect.fn("Credential.compareAndSetOAuth")(function* (id, expected, value) {
+        return yield* db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get()
+              const current = row ? stored(row)?.value : undefined
+              if (
+                current?.type !== "oauth" ||
+                current.methodID !== expected.methodID ||
+                current.access !== expected.access ||
+                current.refresh !== expected.refresh ||
+                current.expires !== expected.expires ||
+                JSON.stringify(current.metadata) !== JSON.stringify(expected.metadata)
+              )
+                return current
+              yield* tx.update(CredentialTable).set({ value }).where(eq(CredentialTable.id, id)).run()
+              return value
+            }),
+          )
           .pipe(Effect.orDie)
       }),
       remove: Effect.fn("Credential.remove")(function* (id) {

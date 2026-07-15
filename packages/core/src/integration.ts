@@ -418,6 +418,7 @@ export const locationLayer = Layer.effect(
               const latest = yield* credentials.get(credential.id)
               if (!latest || latest.value.type === "key") return latest?.value
               if (
+                latest.value.methodID !== oauth.methodID ||
                 latest.value.access !== oauth.access ||
                 latest.value.refresh !== oauth.refresh ||
                 latest.value.expires !== oauth.expires
@@ -431,16 +432,7 @@ export const locationLayer = Layer.effect(
               const now = yield* Clock.currentTimeMillis
               if (latest.value.expires > now + Duration.toMillis(Duration.minutes(5))) return latest.value
               const value = yield* authorize(implementation.refresh(latest.value))
-              const current = yield* credentials.get(latest.id)
-              if (!current || current.value.type === "key") return current?.value
-              if (
-                current.value.access !== latest.value.access ||
-                current.value.refresh !== latest.value.refresh ||
-                current.value.expires !== latest.value.expires
-              )
-                return current.value
-              yield* credentials.update(latest.id, { value })
-              return value
+              return yield* credentials.compareAndSetOAuth(latest.id, latest.value, value)
             }),
           )
         }),

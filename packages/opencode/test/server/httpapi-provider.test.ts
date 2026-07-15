@@ -448,6 +448,11 @@ describe("provider HttpApi", () => {
         refresh: "refresh-from-control",
       })
       expect((yield* request("/auth/anthropic-subscription", { method: "DELETE", headers })).status).toBe(200)
+      expect(
+        yield* Effect.gen(function* () {
+          return yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)
+        }).pipe(Effect.provide(AppNodeBuilder.build(Credential.node))),
+      ).toEqual([])
     }),
     { ...projectOptions, init: writeAnthropicSubscriptionPlugin },
     30000,

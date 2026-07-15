@@ -228,6 +228,33 @@ describe("plugin.anthropic-subscription", () => {
     expect(authorizations).toEqual(["Bearer access-token", "Bearer access-new"])
   })
 
+  test("does not refresh a credential removed after a 401", async () => {
+    let reads = 0
+    let refreshes = 0
+    let apiRequests = 0
+    const hooks = await AnthropicSubscriptionAuthPlugin(input(), {
+      apiOrigin: "https://api.test",
+      tokenEndpoint: "https://tokens.test/oauth/token",
+      now: () => 0,
+      async fetch(request, init) {
+        const current = new Request(request, init)
+        if (current.url === "https://tokens.test/oauth/token") {
+          refreshes += 1
+          return Response.json({ access_token: "unexpected", refresh_token: "unexpected", expires_in: 3600 })
+        }
+        apiRequests += 1
+        return new Response("{}", { status: 401 })
+      },
+    })
+    const loaded = await hooks.auth!.loader!(async () => (reads++ < 2 ? oauth : undefined) as never, {} as never)
+
+    await expect(loaded.fetch!("https://api.test/v1/messages")).rejects.toThrow(
+      "Anthropic subscription is disconnected",
+    )
+    expect(apiRequests).toBe(1)
+    expect(refreshes).toBe(0)
+  })
+
   test("handles credentials removed during loader initialization and requests", async () => {
     const hooks = await AnthropicSubscriptionAuthPlugin(input(), { apiOrigin: "https://api.test" })
     expect(await hooks.auth!.loader!(async () => undefined as never, {} as never)).toEqual({})

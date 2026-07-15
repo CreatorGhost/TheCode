@@ -37,9 +37,7 @@ function updateDurable(value?: Auth.Info) {
         })
       return previous
     }
-    for (const credential of yield* credentials.list(AnthropicSubscriptionIntegrationID)) {
-      yield* credentials.remove(credential.id)
-    }
+    if (previous) yield* credentials.remove(previous.id)
     return previous
   }).pipe(Effect.provide(credentialLayer))
 }

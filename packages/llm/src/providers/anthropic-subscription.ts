@@ -1,6 +1,6 @@
 import { Effect, Stream } from "effect"
 import { Headers } from "effect/unstable/http"
-import * as AnthropicMessages from "../protocols/anthropic-messages"
+import { AnthropicMessages } from "../protocols/anthropic-messages"
 import { Auth } from "../route/auth"
 import { Route, type RouteDefaultsInput } from "../route/client"
 import { Endpoint } from "../route/endpoint"
@@ -45,8 +45,6 @@ const prefixToolName = (name: string) => {
   if (name.startsWith(toolPrefix)) return name
   return `${toolPrefix}${name.charAt(0).toUpperCase()}${name.slice(1)}`
 }
-
-const unprefixToolName = (name: string) => `${name.charAt(0).toLowerCase()}${name.slice(1)}`
 
 const toolNames = (tools: RequestBody["tools"]) => {
   const outbound = new Map<string, string>()
@@ -159,10 +157,10 @@ export const toolNameMap = (body: string): ReadonlyMap<string, string> => {
 }
 
 export const restoreToolNames = (frame: string, names?: ReadonlyMap<string, string>) =>
-  frame.replace(
-    /"name"\s*:\s*"mcp_([^"]+)"/g,
-    (_match, name: string) => `"name":${JSON.stringify(names?.get(`mcp_${name}`) ?? unprefixToolName(name))}`,
-  )
+  frame.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, (match, name: string) => {
+    const restored = names?.get(`mcp_${name}`)
+    return restored === undefined ? match : `"name":${JSON.stringify(restored)}`
+  })
 
 const transport = (version: string) => {
   const base = HttpTransport.sseJson.with<AnthropicMessages.AnthropicMessagesBody>()

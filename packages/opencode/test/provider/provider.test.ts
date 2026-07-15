@@ -3,7 +3,7 @@ import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -23,6 +23,11 @@ import { InstanceStore } from "@/project/instance-store"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { Credential } from "@opencode-ai/core/credential"
+import {
+  AnthropicSubscriptionIntegrationID,
+  AnthropicSubscriptionMethodID,
+} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
 
 const originalEnv = new Map<string, string | undefined>()
 
@@ -184,6 +189,21 @@ it.instance(
       expect(models.every((model) => model.providerID === "anthropic-subscription")).toBe(true)
       expect(models.every((model) => model.api.npm === "@ai-sdk/anthropic")).toBe(true)
       expect(models.every((model) => model.cost.input === 0 && model.cost.output === 0)).toBe(true)
+      expect(
+        yield* Effect.gen(function* () {
+          return yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)
+        }).pipe(Effect.provide(AppNodeBuilder.build(Credential.node))),
+      ).toEqual([
+        expect.objectContaining({
+          integrationID: AnthropicSubscriptionIntegrationID,
+          value: expect.objectContaining({
+            type: "oauth",
+            methodID: AnthropicSubscriptionMethodID,
+            refresh: "refresh-token",
+            access: "access-token",
+          }),
+        }),
+      ])
 
       const language = yield* Provider.use.getLanguage(models[0])
       expect(language).toBeDefined()

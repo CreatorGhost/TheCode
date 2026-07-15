@@ -33,4 +33,67 @@ describe("Credential", () => {
       expect(yield* credentials.list(integrationID)).toEqual([])
     }),
   )
+
+  it.effect("atomically replaces only the expected OAuth value", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      const integrationID = Integration.ID.make("anthropic-subscription")
+      const methodID = Integration.MethodID.make("claude-pro-max")
+      const expected = Credential.OAuth.make({
+        type: "oauth",
+        methodID,
+        access: "expired",
+        refresh: "refresh-old",
+        expires: 0,
+        metadata: { account: "old" },
+      })
+      const created = yield* credentials.create({ integrationID, value: expected })
+      const replacement = Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("replacement"),
+        access: "replacement",
+        refresh: "refresh-replacement",
+        expires: 10,
+        metadata: { account: "replacement" },
+      })
+      yield* credentials.update(created.id, { value: replacement })
+      const refreshed = Credential.OAuth.make({
+        type: "oauth",
+        methodID,
+        access: "refreshed",
+        refresh: "refresh-new",
+        expires: 20,
+      })
+
+      expect(yield* credentials.compareAndSetOAuth(created.id, expected, refreshed)).toEqual(replacement)
+      expect((yield* credentials.get(created.id))?.value).toEqual(replacement)
+      expect(yield* credentials.compareAndSetOAuth(created.id, replacement, refreshed)).toEqual(refreshed)
+      expect((yield* credentials.get(created.id))?.value).toEqual(refreshed)
+
+      const metadataChanged = Credential.OAuth.make({ ...expected, metadata: { account: "changed" } })
+      yield* credentials.update(created.id, { value: metadataChanged })
+      expect(yield* credentials.compareAndSetOAuth(created.id, expected, refreshed)).toEqual(metadataChanged)
+      expect((yield* credentials.get(created.id))?.value).toEqual(metadataChanged)
+
+      yield* credentials.update(created.id, { value: expected })
+      const competing = Credential.OAuth.make({ ...refreshed, access: "competing" })
+      const results = yield* Effect.all(
+        [
+          credentials.compareAndSetOAuth(created.id, expected, refreshed),
+          credentials.compareAndSetOAuth(created.id, expected, competing),
+        ],
+        { concurrency: "unbounded" },
+      )
+      const current = (yield* credentials.get(created.id))?.value
+      if (current?.type !== "oauth") throw new Error("Expected OAuth credential")
+      expect([refreshed, competing]).toContainEqual(current)
+      expect(results).toEqual([current, current])
+
+      const key = Credential.Key.make({ type: "key", key: "replacement-key" })
+      yield* credentials.update(created.id, { value: key })
+      expect(yield* credentials.compareAndSetOAuth(created.id, expected, refreshed)).toEqual(key)
+      yield* credentials.remove(created.id)
+      expect(yield* credentials.compareAndSetOAuth(created.id, expected, refreshed)).toBeUndefined()
+    }),
+  )
 })

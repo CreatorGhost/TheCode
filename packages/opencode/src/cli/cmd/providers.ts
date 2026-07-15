@@ -9,10 +9,12 @@ import { Credential } from "@opencode-ai/core/credential"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import {
   AnthropicSubscriptionIntegrationID,
-  AnthropicSubscriptionMethodID,
   AnthropicSubscriptionProviderID,
 } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
-import { withAnthropicSubscriptionCredentialLock } from "@/provider/anthropic-subscription-credential"
+import {
+  saveAnthropicSubscriptionCredential,
+  withAnthropicSubscriptionCredentialLock,
+} from "@/provider/anthropic-subscription-credential"
 
 import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
@@ -49,40 +51,31 @@ const putOAuth = Effect.fn("Cli.providers.putOAuth")(function* (
     yield* put(provider, { type: "oauth", ...value, ...extra })
     return
   }
-  yield* withAnthropicSubscriptionCredentialLock(
-    Effect.gen(function* () {
-      const durable = yield* Effect.gen(function* () {
-        const credentials = yield* Credential.Service
-        const previous = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
-        const next = Credential.OAuth.make({
-          type: "oauth",
-          methodID: AnthropicSubscriptionMethodID,
-          ...value,
-        })
-        const created = previous
-          ? yield* credentials.update(previous.id, { value: next }).pipe(Effect.as(previous))
-          : yield* credentials.create({
-              integrationID: AnthropicSubscriptionIntegrationID,
-              label: "Claude Pro/Max",
-              value: next,
-            })
-        return { created, previous }
-      }).pipe(Effect.provide(credentialLayer))
-      const auth = yield* Auth.Service
-      yield* Effect.orDie(auth.remove(provider)).pipe(
-        Effect.onError(() =>
-          Effect.gen(function* () {
-            const credentials = yield* Credential.Service
-            if (durable.previous) {
-              yield* credentials.update(durable.previous.id, { value: durable.previous.value })
-              return
-            }
-            yield* credentials.remove(durable.created.id)
-          }).pipe(Effect.provide(credentialLayer)),
-        ),
-      )
-    }),
-  )
+  const auth = yield* Auth.Service
+  yield* Effect.gen(function* () {
+    yield* saveAnthropicSubscriptionCredential(value, { auth, credentials: yield* Credential.Service })
+  }).pipe(Effect.provide(credentialLayer), Effect.orDie)
+})
+
+const withSyntheticSubscriptionAuth = Effect.fn("Cli.providers.withSyntheticSubscriptionAuth")(function* (
+  entries: Array<[string, Auth.Info]>,
+) {
+  const subscription = yield* Effect.gen(function* () {
+    return (yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)).at(-1)
+  }).pipe(Effect.provide(credentialLayer))
+  if (subscription?.value.type !== "oauth" || entries.some(([id]) => id === AnthropicSubscriptionProviderID)) {
+    return entries
+  }
+  entries.push([
+    AnthropicSubscriptionProviderID,
+    {
+      type: "oauth",
+      access: subscription.value.access,
+      refresh: subscription.value.refresh,
+      expires: subscription.value.expires,
+    },
+  ])
+  return entries
 })
 
 const cliTry = <Value>(message: string, fn: () => PromiseLike<Value>) =>
@@ -303,21 +296,7 @@ export const ProvidersListCommand = effectCmd({
     const homedir = os.homedir()
     const displayPath = authPath.startsWith(homedir) ? authPath.replace(homedir, "~") : authPath
     yield* Prompt.intro(`Credentials ${UI.Style.TEXT_DIM}${displayPath}`)
-    const results: Array<[string, Auth.Info]> = Object.entries(yield* Effect.orDie(authSvc.all()))
-    const subscription = yield* Effect.gen(function* () {
-      return (yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)).at(-1)
-    }).pipe(Effect.provide(credentialLayer))
-    if (subscription?.value.type === "oauth" && !results.some(([id]) => id === AnthropicSubscriptionProviderID)) {
-      results.push([
-        AnthropicSubscriptionProviderID,
-        {
-          type: "oauth",
-          access: subscription.value.access,
-          refresh: subscription.value.refresh,
-          expires: subscription.value.expires,
-        },
-      ])
-    }
+    const results = yield* withSyntheticSubscriptionAuth(Object.entries(yield* Effect.orDie(authSvc.all())))
     const database = Provider.withSyntheticProviders(yield* modelsDev.get())
 
     for (const [providerID, result] of results) {
@@ -562,21 +541,7 @@ export const ProvidersLogoutCommand = effectCmd({
     const modelsDev = yield* ModelsDev.Service
 
     UI.empty()
-    const credentials: Array<[string, Auth.Info]> = Object.entries(yield* Effect.orDie(authSvc.all()))
-    const subscription = yield* Effect.gen(function* () {
-      return (yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)).at(-1)
-    }).pipe(Effect.provide(credentialLayer))
-    if (subscription?.value.type === "oauth" && !credentials.some(([id]) => id === AnthropicSubscriptionProviderID)) {
-      credentials.push([
-        AnthropicSubscriptionProviderID,
-        {
-          type: "oauth",
-          access: subscription.value.access,
-          refresh: subscription.value.refresh,
-          expires: subscription.value.expires,
-        },
-      ])
-    }
+    const credentials = yield* withSyntheticSubscriptionAuth(Object.entries(yield* Effect.orDie(authSvc.all())))
     yield* Prompt.intro("Remove credential")
     if (credentials.length === 0) {
       yield* Prompt.log.error("No credentials found")
@@ -606,11 +571,9 @@ export const ProvidersLogoutCommand = effectCmd({
         Effect.gen(function* () {
           const previous = yield* Effect.gen(function* () {
             const credentials = yield* Credential.Service
-            const stored = yield* credentials.list(AnthropicSubscriptionIntegrationID)
-            for (const credential of stored) {
-              yield* credentials.remove(credential.id)
-            }
-            return stored.at(-1)
+            const stored = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
+            if (stored) yield* credentials.remove(stored.id)
+            return stored
           }).pipe(Effect.provide(credentialLayer))
           yield* Effect.orDie(authSvc.remove(provider)).pipe(
             Effect.onError(() =>

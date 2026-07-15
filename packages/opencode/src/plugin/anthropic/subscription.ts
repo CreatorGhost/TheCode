@@ -252,10 +252,13 @@ export async function AnthropicSubscriptionAuthPlugin(input: PluginInput, option
             if (response.status === 401) {
               response.body?.cancel().catch(() => {})
               const latest = await getAuth()
-              if (latest?.type === "oauth" && latest.access && latest.access !== auth.access) {
+              if (latest?.type !== "oauth") {
+                throw new Error("Anthropic subscription is disconnected; reconnect with /connect")
+              }
+              if (latest.access && latest.access !== auth.access) {
                 response = await send(latest.access)
               } else {
-                const refreshed = await refresh(latest?.type === "oauth" ? latest.refresh : auth.refresh)
+                const refreshed = await refresh(latest.refresh)
                 response = await send(refreshed.access)
               }
             }

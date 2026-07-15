@@ -4,6 +4,7 @@ import { makeLocationNode } from "../../effect/app-node"
 import { type Model } from "@opencode-ai/llm"
 import * as AnthropicMessages from "@opencode-ai/llm/protocols/anthropic-messages"
 import { AnthropicSubscription } from "@opencode-ai/llm/providers"
+import { AnthropicSubscriptionMethodID } from "../../plugin/provider/anthropic-subscription"
 import * as OpenAICompatibleChat from "@opencode-ai/llm/protocols/openai-compatible-chat"
 import * as OpenAIResponses from "@opencode-ai/llm/protocols/openai-responses"
 import { Auth, type AnyRoute } from "@opencode-ai/llm/route"
@@ -164,7 +165,7 @@ export const fromCatalogModel = (
         }),
       )
     }
-    if (credential?.type !== "oauth")
+    if (credential?.type !== "oauth" || credential.methodID !== AnthropicSubscriptionMethodID)
       return Effect.fail(
         new CredentialRequiredError({
           providerID: resolved.providerID,

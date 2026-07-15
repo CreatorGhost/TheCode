@@ -305,6 +305,30 @@ describe("SessionRunnerModel", () => {
     }),
   )
 
+  it.effect("rejects Claude subscription credentials from another OAuth method", () =>
+    Effect.gen(function* () {
+      const failure = yield* SessionRunnerModel.fromCatalogModel(
+        ModelV2.Info.make({
+          ...model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }),
+          providerID: ProviderV2.ID.make("anthropic-subscription"),
+        }),
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("other-method"),
+          access: "wrong-access",
+          refresh: "wrong-refresh",
+          expires: Date.now() + 3_600_000,
+        }),
+      ).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "SessionRunnerModel.CredentialRequiredError",
+        providerID: "anthropic-subscription",
+        modelID: "test-model",
+      })
+    }),
+  )
+
   it.effect("uses resolved credentials for bearer auth", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(

@@ -9,6 +9,7 @@ import {
   AnthropicSubscriptionMethodID,
   AnthropicSubscriptionProviderID,
   makeAnthropicSubscriptionPlugin,
+  refreshAnthropicSubscriptionToken,
 } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -218,6 +219,67 @@ describe("AnthropicSubscriptionPlugin", () => {
     }),
   )
 
+  it.effect("bounds stalled shared refreshes and clears them for retry", () =>
+    Effect.gen(function* () {
+      let requests = 0
+      const signals: AbortSignal[] = []
+      const request = (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        requests += 1
+        if (init?.signal) signals.push(init.signal)
+        return new Promise<Response>(() => {})
+      }
+      const input = {
+        refresh: "refresh-timeout",
+        request,
+        tokenEndpoint: "https://tokens.test/oauth/token",
+        timeoutMs: 20,
+      }
+      const first = refreshAnthropicSubscriptionToken(input)
+      const second = refreshAnthropicSubscriptionToken(input)
+      expect(second).toBe(first)
+      expect(
+        yield* Effect.promise(() =>
+          Promise.allSettled([first, second]).then((results) => results.map((result) => result.status)),
+        ),
+      ).toEqual(["rejected", "rejected"])
+      expect(requests).toBe(1)
+      expect(signals[0]?.aborted).toBe(true)
+      expect(
+        yield* Effect.promise(() =>
+          refreshAnthropicSubscriptionToken(input).then(
+            () => "success" as const,
+            () => "failure" as const,
+          ),
+        ),
+      ).toBe("failure")
+      expect(requests).toBe(2)
+      expect(signals[1]?.aborted).toBe(true)
+
+      yield* addPlugin(
+        makeAnthropicSubscriptionPlugin({
+          tokenEndpoint: "https://tokens.test/oauth/token",
+          refreshTimeoutMs: 20,
+          request,
+        }),
+      )
+      yield* (yield* Credential.Service).create({
+        integrationID: AnthropicSubscriptionIntegrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID: AnthropicSubscriptionMethodID,
+          access: "expired",
+          refresh: "refresh-integration-timeout",
+          expires: 0,
+        }),
+      })
+      const integrations = yield* Integration.Service
+      const connection = required(yield* integrations.connection.active(AnthropicSubscriptionIntegrationID))
+      expect((yield* integrations.connection.resolve(connection).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(requests).toBe(3)
+      expect(signals[2]?.aborted).toBe(true)
+    }),
+  )
+
   it.effect("does not overwrite a credential reconnected during refresh", () =>
     Effect.gen(function* () {
       const gate = Promise.withResolvers<void>()
@@ -273,6 +335,54 @@ describe("AnthropicSubscriptionPlugin", () => {
         access: "reconnected-access",
         refresh: "reconnected-refresh",
       })
+    }),
+  )
+
+  it.effect("does not overwrite an OAuth method changed during refresh", () =>
+    Effect.gen(function* () {
+      const gate = Promise.withResolvers<void>()
+      let requests = 0
+      yield* addPlugin(
+        makeAnthropicSubscriptionPlugin({
+          tokenEndpoint: "https://tokens.test/oauth/token",
+          async request() {
+            requests += 1
+            await gate.promise
+            return Response.json({ access_token: "stale-access", refresh_token: "stale-refresh", expires_in: 3600 })
+          },
+        }),
+      )
+      const credentials = yield* Credential.Service
+      const stored = yield* credentials.create({
+        integrationID: AnthropicSubscriptionIntegrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID: AnthropicSubscriptionMethodID,
+          access: "expired",
+          refresh: "refresh-method-race",
+          expires: 0,
+        }),
+      })
+      const integrations = yield* Integration.Service
+      const connection = required(yield* integrations.connection.active(AnthropicSubscriptionIntegrationID))
+      const running = yield* integrations.connection.resolve(connection).pipe(Effect.forkChild)
+      yield* Effect.promise(async () => {
+        while (requests === 0) await Bun.sleep(1)
+      })
+      const methodID = Integration.MethodID.make("replacement-method")
+      yield* credentials.update(stored.id, {
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "expired",
+          refresh: "refresh-method-race",
+          expires: 0,
+        }),
+      })
+      gate.resolve()
+
+      expect(yield* Fiber.join(running)).toMatchObject({ methodID, access: "expired" })
+      expect((yield* credentials.get(stored.id))?.value).toMatchObject({ methodID, access: "expired" })
     }),
   )
 })

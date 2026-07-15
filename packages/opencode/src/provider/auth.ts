@@ -7,12 +7,8 @@ import { optional } from "@opencode-ai/core/schema"
 import { Plugin } from "../plugin"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Credential } from "@opencode-ai/core/credential"
-import {
-  AnthropicSubscriptionIntegrationID,
-  AnthropicSubscriptionMethodID,
-  AnthropicSubscriptionProviderID,
-} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
-import { withAnthropicSubscriptionCredentialLock } from "./anthropic-subscription-credential"
+import { AnthropicSubscriptionProviderID } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
+import { saveAnthropicSubscriptionCredential } from "./anthropic-subscription-credential"
 import { Array as Arr, Effect, Layer, Record, Result, Context, Schema } from "effect"
 
 const When = Schema.Struct({
@@ -226,34 +222,7 @@ const layer: Layer.Layer<Service, never, Auth.Service | Credential.Service | Plu
           ...extra,
         } as const
         if (input.providerID === AnthropicSubscriptionProviderID) {
-          yield* withAnthropicSubscriptionCredentialLock(
-            Effect.gen(function* () {
-              const previous = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
-              const next = Credential.OAuth.make({
-                type: "oauth",
-                methodID: AnthropicSubscriptionMethodID,
-                access,
-                refresh,
-                expires,
-              })
-              const created = previous
-                ? yield* credentials.update(previous.id, { value: next }).pipe(Effect.as(previous))
-                : yield* credentials.create({
-                    integrationID: AnthropicSubscriptionIntegrationID,
-                    label: "Claude Pro/Max",
-                    value: next,
-                  })
-              yield* auth
-                .remove(input.providerID)
-                .pipe(
-                  Effect.tapError(() =>
-                    previous
-                      ? credentials.update(previous.id, { value: previous.value })
-                      : credentials.remove(created.id),
-                  ),
-                )
-            }),
-          )
+          yield* saveAnthropicSubscriptionCredential({ access, refresh, expires }, { auth, credentials })
           return
         }
         yield* auth.set(input.providerID, value)

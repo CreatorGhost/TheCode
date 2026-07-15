@@ -7,54 +7,13 @@ import { LogInput } from "../groups/control"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Credential } from "@opencode-ai/core/credential"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { AnthropicSubscriptionProviderID } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
 import {
-  AnthropicSubscriptionIntegrationID,
-  AnthropicSubscriptionMethodID,
-  AnthropicSubscriptionProviderID,
-} from "@opencode-ai/core/plugin/provider/anthropic-subscription"
-import { withAnthropicSubscriptionCredentialLock } from "@/provider/anthropic-subscription-credential"
+  removeAnthropicSubscriptionCredential,
+  saveAnthropicSubscriptionCredential,
+} from "@/provider/anthropic-subscription-credential"
 
 const credentialLayer = AppNodeBuilder.build(Credential.node)
-
-function updateDurable(value?: Auth.Info) {
-  return Effect.gen(function* () {
-    const credentials = yield* Credential.Service
-    const previous = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
-    if (value?.type === "oauth") {
-      const next = Credential.OAuth.make({
-        type: "oauth",
-        methodID: AnthropicSubscriptionMethodID,
-        access: value.access,
-        refresh: value.refresh,
-        expires: value.expires,
-      })
-      if (previous) yield* credentials.update(previous.id, { value: next })
-      else
-        yield* credentials.create({
-          integrationID: AnthropicSubscriptionIntegrationID,
-          label: "Claude Pro/Max",
-          value: next,
-        })
-      return previous
-    }
-    if (previous) yield* credentials.remove(previous.id)
-    return previous
-  }).pipe(Effect.provide(credentialLayer))
-}
-
-function restoreDurable(previous: Credential.Info | undefined) {
-  if (!previous) return updateDurable()
-  return Effect.gen(function* () {
-    const credentials = yield* Credential.Service
-    if (yield* credentials.get(previous.id)) yield* credentials.update(previous.id, { value: previous.value })
-    else
-      yield* credentials.create({
-        integrationID: previous.integrationID,
-        label: previous.label,
-        value: previous.value,
-      })
-  }).pipe(Effect.provide(credentialLayer))
-}
 
 export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (handlers) =>
   Effect.gen(function* () {
@@ -68,15 +27,17 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
         yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
         return true
       }
-      yield* withAnthropicSubscriptionCredentialLock(
-        Effect.gen(function* () {
-          const previous = yield* updateDurable(ctx.payload)
-          yield* auth.remove(ctx.params.providerID).pipe(
-            Effect.tapError(() => restoreDurable(previous)),
-            Effect.orDie,
-          )
-        }),
-      )
+      yield* Effect.gen(function* () {
+        const credentials = yield* Credential.Service
+        if (ctx.payload.type !== "oauth") {
+          yield* removeAnthropicSubscriptionCredential({ auth, credentials })
+          return
+        }
+        yield* saveAnthropicSubscriptionCredential(
+          { access: ctx.payload.access, refresh: ctx.payload.refresh, expires: ctx.payload.expires },
+          { auth, credentials },
+        )
+      }).pipe(Effect.provide(credentialLayer), Effect.orDie)
       return true
     })
 
@@ -87,15 +48,9 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
         yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
         return true
       }
-      yield* withAnthropicSubscriptionCredentialLock(
-        Effect.gen(function* () {
-          const previous = yield* updateDurable()
-          yield* auth.remove(ctx.params.providerID).pipe(
-            Effect.tapError(() => restoreDurable(previous)),
-            Effect.orDie,
-          )
-        }),
-      )
+      yield* Effect.gen(function* () {
+        yield* removeAnthropicSubscriptionCredential({ auth, credentials: yield* Credential.Service })
+      }).pipe(Effect.provide(credentialLayer), Effect.orDie)
       return true
     })
 

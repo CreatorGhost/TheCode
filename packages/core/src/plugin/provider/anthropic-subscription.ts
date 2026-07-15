@@ -136,7 +136,7 @@ export const makeAnthropicSubscriptionPlugin = (options: Options = {}) => {
             timeoutMs: options.refreshTimeoutMs,
           }),
         catch: (cause) => cause,
-      }).pipe(Effect.map((result) => credential(result, result.refresh_token ?? value.refresh, now))),
+      }).pipe(Effect.map((result) => credential(result, result.refresh_token ?? value.refresh, now, value.metadata))),
   } satisfies IntegrationOAuthMethodRegistration
 
   return define({
@@ -198,13 +198,19 @@ async function tokenRequestPromise(request: Fetch, url: string, body: Record<str
   return result
 }
 
-function credential(tokens: AnthropicSubscriptionTokenResponse, refresh: string, now: () => number) {
+function credential(
+  tokens: AnthropicSubscriptionTokenResponse,
+  refresh: string,
+  now: () => number,
+  metadata?: Credential.OAuth["metadata"],
+) {
   return Credential.OAuth.make({
     type: "oauth",
     methodID: AnthropicSubscriptionMethodID,
     access: tokens.access_token,
     refresh,
     expires: now() + (tokens.expires_in ?? 3600) * 1000,
+    metadata,
   })
 }
 

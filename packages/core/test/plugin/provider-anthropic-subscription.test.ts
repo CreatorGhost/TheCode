@@ -159,6 +159,16 @@ describe("AnthropicSubscriptionPlugin", () => {
       expect(requests).toHaveLength(1)
 
       const connection = required(yield* integrations.connection.active(AnthropicSubscriptionIntegrationID))
+      if (connection.type !== "credential") throw new Error("Expected stored credential")
+      const credentials = yield* Credential.Service
+      const stored = required(yield* credentials.get(connection.id))
+      if (stored.value.type !== "oauth") throw new Error("Expected OAuth credential")
+      yield* credentials.update(stored.id, {
+        value: Credential.OAuth.make({
+          ...stored.value,
+          metadata: { "opencode.internal.revision": "pending" },
+        }),
+      })
       clock.now = 0
       const resolved = yield* Effect.all(
         [integrations.connection.resolve(connection), integrations.connection.resolve(connection)],
@@ -171,10 +181,81 @@ describe("AnthropicSubscriptionPlugin", () => {
           access: "access-refreshed",
           refresh: "refresh-rotated",
           expires: 3_600_000,
+          metadata: { "opencode.internal.revision": "pending" },
         }),
       )
       expect(requests).toHaveLength(2)
       expect(requests[0].headers.get("anthropic-beta")).toBe("oauth-2025-04-20")
+    }),
+  )
+
+  it.effect("persists a rotated refresh after pending metadata is finalized", () =>
+    Effect.gen(function* () {
+      const finalize = { run: undefined as (() => Promise<void>) | undefined }
+      yield* addPlugin(
+        makeAnthropicSubscriptionPlugin({
+          authorizationOrigin: "https://login.test",
+          tokenEndpoint: "https://tokens.test/oauth/token",
+          now: () => 0,
+          async request(input, init) {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+            const request = new Request(url, init)
+            const body = (await request.clone().json()) as { grant_type: string }
+            if (body.grant_type === "refresh_token") {
+              await finalize.run?.()
+              return Response.json({
+                access_token: "access-refreshed",
+                refresh_token: "refresh-rotated",
+                expires_in: 3600,
+              })
+            }
+            return Response.json({ access_token: "access-initial", refresh_token: "refresh-initial", expires_in: 1 })
+          },
+        }),
+      )
+      const integrations = yield* Integration.Service
+      const attempt = yield* integrations.connection.oauth({
+        integrationID: AnthropicSubscriptionIntegrationID,
+        methodID: AnthropicSubscriptionMethodID,
+        inputs: {},
+      })
+      const state = required(new URL(attempt.url).searchParams.get("state") ?? undefined)
+      yield* integrations.attempt.complete({ attemptID: attempt.attemptID, code: `code#${state}` })
+      const connection = required(yield* integrations.connection.active(AnthropicSubscriptionIntegrationID))
+      if (connection.type !== "credential") throw new Error("Expected stored credential")
+      const credentials = yield* Credential.Service
+      const stored = required(yield* credentials.get(connection.id))
+      if (stored.value.type !== "oauth") throw new Error("Expected OAuth credential")
+      const pending = Credential.OAuth.make({
+        ...stored.value,
+        metadata: {
+          "opencode.internal.revision": "pending",
+          "opencode.internal.pendingUntil": Date.now() + 60_000,
+        },
+      })
+      yield* credentials.update(stored.id, { value: pending })
+      finalize.run = () =>
+        Effect.runPromise(
+          credentials
+            .compareAndSetOAuth(
+              stored.id,
+              pending,
+              Credential.OAuth.make({
+                ...pending,
+                metadata: undefined,
+              }),
+            )
+            .pipe(Effect.asVoid),
+        )
+
+      const resolved = required(yield* integrations.connection.resolve(connection))
+      expect(resolved).toMatchObject({
+        access: "access-refreshed",
+        refresh: "refresh-rotated",
+        expires: 3_600_000,
+      })
+      expect(resolved.metadata).toBeUndefined()
+      expect((yield* credentials.get(stored.id))?.value).toEqual(resolved)
     }),
   )
 

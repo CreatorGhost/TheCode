@@ -432,7 +432,7 @@ export const locationLayer = Layer.effect(
               const now = yield* Clock.currentTimeMillis
               if (latest.value.expires > now + Duration.toMillis(Duration.minutes(5))) return latest.value
               const value = yield* authorize(implementation.refresh(latest.value))
-              return yield* credentials.compareAndSetOAuth(latest.id, latest.value, value)
+              return yield* persistOAuthRefresh(latest.id, latest.value, value, credentials)
             }),
           )
         }),
@@ -551,5 +551,34 @@ export const locationLayer = Layer.effect(
     })
   }),
 )
+
+function persistOAuthRefresh(
+  id: Credential.ID,
+  expected: Credential.OAuth,
+  value: Credential.OAuth,
+  credentials: Credential.Interface,
+): Effect.Effect<Credential.Value | undefined> {
+  return credentials.compareAndSetOAuth(id, expected, value).pipe(
+    Effect.flatMap((result) => {
+      if (result.updated) return Effect.succeed(value)
+      const current = result.value
+      if (
+        current?.type !== "oauth" ||
+        current.methodID !== expected.methodID ||
+        current.access !== expected.access ||
+        current.refresh !== expected.refresh ||
+        current.expires !== expected.expires
+      ) {
+        return Effect.succeed(current)
+      }
+      return persistOAuthRefresh(
+        id,
+        current,
+        Credential.OAuth.make({ ...value, metadata: current.metadata }),
+        credentials,
+      )
+    }),
+  )
+}
 
 export const node = makeLocationNode({ service: Service, layer: locationLayer, deps: [Credential.node, EventV2.node] })

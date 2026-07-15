@@ -50,6 +50,32 @@ interface TokenResponse {
   expires_in?: number
 }
 
+function persistRefresh(
+  id: Credential.ID,
+  expected: Credential.OAuth,
+  value: Credential.OAuth,
+  credentials: Credential.Interface,
+): Effect.Effect<void> {
+  return credentials.compareAndSetOAuth(id, expected, value).pipe(
+    Effect.flatMap((result) => {
+      if (result.updated) return Effect.void
+      const current = result.value
+      if (current?.type !== "oauth" || current.methodID !== AnthropicSubscriptionMethodID) {
+        return Effect.die("Anthropic subscription is disconnected")
+      }
+      if (current.access === value.access && current.refresh === value.refresh) return Effect.void
+      if (
+        current.access !== expected.access ||
+        current.refresh !== expected.refresh ||
+        current.expires !== expected.expires
+      ) {
+        return Effect.die("Anthropic subscription is disconnected")
+      }
+      return persistRefresh(id, current, Credential.OAuth.make({ ...value, metadata: current.metadata }), credentials)
+    }),
+  )
+}
+
 function persistDurable(value: { access: string; refresh: string; expires: number; expectedRefresh: string }) {
   return Effect.runPromise(
     withAnthropicSubscriptionCredentialLock(
@@ -60,11 +86,11 @@ function persistDurable(value: { access: string; refresh: string; expires: numbe
         const credential = Credential.OAuth.make({
           type: "oauth",
           methodID: AnthropicSubscriptionMethodID,
+          metadata: current?.value.metadata,
           ...tokens,
         })
         if (current?.value.type === "oauth" && current.value.refresh === value.expectedRefresh) {
-          yield* credentials.update(current.id, { value: credential })
-          return
+          return yield* persistRefresh(current.id, current.value, credential, credentials)
         }
         if (
           current?.value.type === "oauth" &&

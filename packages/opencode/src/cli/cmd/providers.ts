@@ -12,8 +12,8 @@ import {
   AnthropicSubscriptionProviderID,
 } from "@opencode-ai/core/plugin/provider/anthropic-subscription"
 import {
+  removeAnthropicSubscriptionCredential,
   saveAnthropicSubscriptionCredential,
-  withAnthropicSubscriptionCredentialLock,
 } from "@/provider/anthropic-subscription-credential"
 
 import { map, pipe, sortBy, values } from "remeda"
@@ -61,7 +61,8 @@ const withSyntheticSubscriptionAuth = Effect.fn("Cli.providers.withSyntheticSubs
   entries: Array<[string, Auth.Info]>,
 ) {
   const subscription = yield* Effect.gen(function* () {
-    return (yield* (yield* Credential.Service).list(AnthropicSubscriptionIntegrationID)).at(-1)
+    const credentials = yield* Credential.Service
+    return (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
   }).pipe(Effect.provide(credentialLayer))
   if (subscription?.value.type !== "oauth" || entries.some(([id]) => id === AnthropicSubscriptionProviderID)) {
     return entries
@@ -567,30 +568,9 @@ export const ProvidersLogoutCommand = effectCmd({
         )
     if (!provider) return yield* fail(`Unknown configured provider "${args.provider}"`)
     if (provider === AnthropicSubscriptionProviderID) {
-      yield* withAnthropicSubscriptionCredentialLock(
-        Effect.gen(function* () {
-          const previous = yield* Effect.gen(function* () {
-            const credentials = yield* Credential.Service
-            const stored = (yield* credentials.list(AnthropicSubscriptionIntegrationID)).at(-1)
-            if (stored) yield* credentials.remove(stored.id)
-            return stored
-          }).pipe(Effect.provide(credentialLayer))
-          yield* Effect.orDie(authSvc.remove(provider)).pipe(
-            Effect.onError(() =>
-              previous
-                ? Effect.gen(function* () {
-                    const credentials = yield* Credential.Service
-                    yield* credentials.create({
-                      integrationID: previous.integrationID,
-                      label: previous.label,
-                      value: previous.value,
-                    })
-                  }).pipe(Effect.provide(credentialLayer))
-                : Effect.void,
-            ),
-          )
-        }),
-      )
+      yield* Effect.gen(function* () {
+        yield* removeAnthropicSubscriptionCredential({ auth: authSvc, credentials: yield* Credential.Service })
+      }).pipe(Effect.provide(credentialLayer), Effect.orDie)
       yield* Prompt.outro("Logout successful")
       return
     }

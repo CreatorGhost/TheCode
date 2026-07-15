@@ -151,7 +151,7 @@ const save = Effect.fn("AnthropicSubscriptionCredential.saveUnlocked")(function*
     )
     return yield* retireLegacy(result.credential.id, previousValue, pending, next, services)
   }
-  if (previous.value.type !== "oauth") {
+  if (previous.value.type !== "oauth" || previous.value.methodID !== AnthropicSubscriptionMethodID) {
     return yield* Effect.fail(new Auth.AuthError({ message: "Anthropic subscription credential changed during save" }))
   }
   const previousValue = yield* replaceOAuth(previous.id, previous.value, pending, services.credentials)

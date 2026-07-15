@@ -569,7 +569,8 @@ export const ProvidersLogoutCommand = effectCmd({
     if (!provider) return yield* fail(`Unknown configured provider "${args.provider}"`)
     if (provider === AnthropicSubscriptionProviderID) {
       yield* Effect.gen(function* () {
-        yield* removeAnthropicSubscriptionCredential({ auth: authSvc, credentials: yield* Credential.Service })
+        const credentials = yield* Credential.Service
+        yield* removeAnthropicSubscriptionCredential({ auth: authSvc, credentials })
       }).pipe(Effect.provide(credentialLayer), Effect.orDie)
       yield* Prompt.outro("Logout successful")
       return

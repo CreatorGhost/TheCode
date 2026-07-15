@@ -49,7 +49,8 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
         return true
       }
       yield* Effect.gen(function* () {
-        yield* removeAnthropicSubscriptionCredential({ auth, credentials: yield* Credential.Service })
+        const credentials = yield* Credential.Service
+        yield* removeAnthropicSubscriptionCredential({ auth, credentials })
       }).pipe(Effect.provide(credentialLayer), Effect.orDie)
       return true
     })

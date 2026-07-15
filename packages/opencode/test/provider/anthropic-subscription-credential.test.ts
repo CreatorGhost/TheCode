@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { Credential } from "@opencode-ai/core/credential"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { Integration } from "@opencode-ai/core/integration"
 import {
   AnthropicSubscriptionIntegrationID,
   AnthropicSubscriptionMethodID,
@@ -242,6 +243,36 @@ it.effect("does not overwrite a credential claimed by a concurrent save", () =>
       ).pipe(Effect.exit))._tag,
     ).toBe("Failure")
     expect((yield* credentials.get(previous.id))?.value).toEqual(concurrent)
+  }),
+)
+
+it.effect("does not replace a credential owned by another OAuth method", () =>
+  Effect.gen(function* () {
+    const credentials = yield* Credential.Service
+    const existing = yield* credentials.create({
+      integrationID: AnthropicSubscriptionIntegrationID,
+      value: Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("other-method"),
+        access: "other-access",
+        refresh: "other-refresh",
+        expires: 20,
+      }),
+    })
+    const successfulAuth = Auth.Service.of({
+      get: () => Effect.succeed(undefined),
+      all: () => Effect.succeed({}),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    })
+
+    expect(
+      (yield* saveAnthropicSubscriptionCredential(
+        { access: "new-access", refresh: "new-refresh", expires: 30 },
+        { auth: successfulAuth, credentials },
+      ).pipe(Effect.exit))._tag,
+    ).toBe("Failure")
+    expect(yield* credentials.get(existing.id)).toEqual(existing)
   }),
 )
 

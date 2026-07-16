@@ -112,6 +112,20 @@ export const TaskTool = Tool.define(
         )
       }
 
+      const parent = yield* sessions.get(ctx.sessionID)
+      let ancestor = parent
+      let depth = 0
+      while (ancestor.parentID) {
+        depth++
+        ancestor = yield* sessions.get(ancestor.parentID)
+      }
+      if (depth >= (cfg.subagent_depth ?? 1)) {
+        return yield* Effect.fail(
+          new Error(
+            `Subagent depth limit reached (${cfg.subagent_depth ?? 1}). Increase "subagent_depth" to allow nested subagents.`,
+          ),
+        )
+      }
       const next = yield* agent.get(params.subagent_type)
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
@@ -179,7 +193,6 @@ export const TaskTool = Tool.define(
         })
       }
 
-      const parent = yield* sessions.get(ctx.sessionID)
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
         subagent: next,
